@@ -24,8 +24,8 @@ We’ll follow this order and update the progress section below as we go.
 
 | # | Step | Status |
 |---|------|--------|
-| 1 | **Environment setup** – Create `.env` from `.env.example`, add `GOOGLE_API_KEY`, verify Node + Python | ⬜ Pending |
-| 2 | **Project structure** – Create `backend/` (FastAPI), `frontend/` (Next.js), `docs/` if needed | ⬜ Pending |
+| 1 | **Environment setup** – Create `.env` from `.env.example`, add `GOOGLE_API_KEY`, verify Node + Python | ✅ Done |
+| 2 | **Project structure** – Create `backend/` (FastAPI), `frontend/` (Next.js), `docs/` if needed | ✅ Done |
 | 3 | **Backend skeleton** – FastAPI app, health check, CORS for frontend | ⬜ Pending |
 | 4 | **Gemini integration** – Call Gemini API from backend (e.g. one test endpoint) | ⬜ Pending |
 | 5 | **Agent orchestration** – Introduce LangGraph (or minimal agent flow): Planner → Data Discovery → Execution/Validation | ⬜ Pending |
@@ -43,6 +43,28 @@ We’ll follow this order and update the progress section below as we go.
 - **Tools** – Node.js and Python installed (as per your setup).
 - **API key** – Google API key obtained; to be used via `.env` only (see above).
 - **README and roadmap** – This README and the next steps above created; progress will be updated here as we complete each step.
+- **Step 1 done** – `.env` created and configured; environment ready.
+- **Step 2 done** – `backend/` (FastAPI + health check + CORS) and `frontend/` (Next.js + Tailwind, App Router, `src/`) created with base files.
+
+---
+
+## How to run (local)
+
+**Backend**
+```bash
+cd backend
+pip install -r requirements.txt
+uvicorn main:app --reload
+```
+API: http://localhost:8000 — Docs: http://localhost:8000/docs
+
+**Frontend**
+```bash
+cd frontend
+npm install
+npm run dev
+```
+App: http://localhost:3000
 
 ---
 
