@@ -1,0 +1,30 @@
+# Environment and secrets
+.env
+.env.local
+.env.*.local
+
+# Dependencies
+node_modules/
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# Build and IDE
+.next/
+out/
+dist/
+*.egg-info/
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs and temp
+*.log
+.cache/
+tmp/
+temp/
