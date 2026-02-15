@@ -26,7 +26,7 @@ We’ll follow this order and update the progress section below as we go.
 |---|------|--------|
 | 1 | **Environment setup** – Create `.env` from `.env.example`, add `GOOGLE_API_KEY`, verify Node + Python | ✅ Done |
 | 2 | **Project structure** – Create `backend/` (FastAPI), `frontend/` (Next.js), `docs/` if needed | ✅ Done |
-| 3 | **Backend skeleton** – FastAPI app, health check, CORS for frontend | ⬜ Pending |
+| 3 | **Backend skeleton** – FastAPI app, health check, CORS for frontend | ✅ Done |
 | 4 | **Gemini integration** – Call Gemini API from backend (e.g. one test endpoint) | ⬜ Pending |
 | 5 | **Agent orchestration** – Introduce LangGraph (or minimal agent flow): Planner → Data Discovery → Execution/Validation | ⬜ Pending |
 | 6 | **BigQuery (optional for POC)** – Schema introspection and/or dry-run cost; or mock data for first demo | ⬜ Pending |
@@ -45,6 +45,7 @@ We’ll follow this order and update the progress section below as we go.
 - **README and roadmap** – This README and the next steps above created; progress will be updated here as we complete each step.
 - **Step 1 done** – `.env` created and configured; environment ready.
 - **Step 2 done** – `backend/` (FastAPI + health check + CORS) and `frontend/` (Next.js + Tailwind, App Router, `src/`) created with base files.
+- **Step 3 done** – Backend skeleton in place (`main.py` with `/health`, CORS for frontend).
 
 ---
 
