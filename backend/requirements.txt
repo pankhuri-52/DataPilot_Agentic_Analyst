@@ -2,3 +2,6 @@
 fastapi>=0.109.0
 uvicorn[standard]>=0.27.0
 python-dotenv>=1.0.0
+
+# BigQuery (POC data & later agent queries)
+google-cloud-bigquery>=3.14.0

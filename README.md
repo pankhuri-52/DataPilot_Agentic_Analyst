@@ -29,11 +29,17 @@ We’ll follow this order and update the progress section below as we go.
 | 3 | **Backend skeleton** – FastAPI app, health check, CORS for frontend | ✅ Done |
 | 4 | **Gemini integration** – Call Gemini API from backend (e.g. one test endpoint) | ⬜ Pending |
 | 5 | **Agent orchestration** – Introduce LangGraph (or minimal agent flow): Planner → Data Discovery → Execution/Validation | ⬜ Pending |
-| 6 | **BigQuery (optional for POC)** – Schema introspection and/or dry-run cost; or mock data for first demo | ⬜ Pending |
+| 6 | **BigQuery (optional for POC)** – DDL + INSERT scripts ready; create dataset/tables and load data in BigQuery console | ✅ Done |
 | 7 | **Frontend skeleton** – Next.js + Tailwind, one page with a text input for “ask a question” | ⬜ Pending |
 | 8 | **Connect UI to backend** – Submit question, show agent response and simple trace | ⬜ Pending |
 | 9 | **Agent trace UI** – Show step-by-step reasoning and decisions | ⬜ Pending |
 | 10 | **Polish** – Basic charts, cost estimate display, guardrails messaging | ⬜ Pending |
+
+---
+
+## What to do next
+
+**Next step: 4 – Gemini integration.** Add a test endpoint in the backend that calls the Gemini API (using `GOOGLE_API_KEY` from `.env`). After that, do step 5 (agent orchestration with LangGraph) or step 7 (frontend "ask a question" input), then step 8 (connect UI to backend).
 
 ---
 
@@ -46,6 +52,7 @@ We’ll follow this order and update the progress section below as we go.
 - **Step 1 done** – `.env` created and configured; environment ready.
 - **Step 2 done** – `backend/` (FastAPI + health check + CORS) and `frontend/` (Next.js + Tailwind, App Router, `src/`) created with base files.
 - **Step 3 done** – Backend skeleton in place (`main.py` with `/health`, CORS for frontend).
+- **Step 6 (BigQuery POC)** – DDL and INSERT scripts in `backend/bigquery/`: use `01_ddl.sql` and `02_inserts.sql` in the BigQuery console (replace `YOUR_PROJECT_ID` and `YOUR_DATASET_ID`). See `backend/bigquery/README_DATA_MODEL.md` for data model and example queries. Use `GET /bigquery/tables` to verify.
 
 ---
 
@@ -69,6 +76,57 @@ App: http://localhost:3000
 
 ---
 
+## BigQuery POC – tables and sample data
+
+To get **good insights** from the agent later, set up BigQuery and load sample data:
+
+### 1. Connection (choose one)
+
+- **Option A – Service account (recommended)**  
+  Create a GCP service account with BigQuery roles, download JSON key, then in `.env`:
+  ```env
+  BIGQUERY_PROJECT_ID=your-gcp-project-id
+  BIGQUERY_DATASET=datapilot_poc
+  GOOGLE_APPLICATION_CREDENTIALS=path/to/your-service-account.json
+  ```
+- **Option B – Application Default Credentials**  
+  If you use `gcloud`, run:
+  ```bash
+  gcloud auth application-default login
+  ```
+  Then in `.env` set only:
+  ```env
+  BIGQUERY_PROJECT_ID=your-gcp-project-id
+  BIGQUERY_DATASET=datapilot_poc
+  ```
+
+### 2. Create dataset, tables, and load sample data (manual in BigQuery)
+
+1. In the [BigQuery console](https://console.cloud.google.com/bigquery), create a dataset (e.g. `customer_data`) in your project.
+2. Open `backend/bigquery/01_ddl.sql`, replace `YOUR_PROJECT_ID` and `YOUR_DATASET_ID` with your project and dataset, then run the full script to create tables.
+3. Open `backend/bigquery/02_inserts.sql`, make the same replacement, then run the INSERTs in order: **products** → **customers** → **orders** → **order_items** → **sales_daily** (the last is an `INSERT...SELECT` from the others).
+
+This gives you: **products**, **customers**, **orders**, **order_items**, **sales_daily** with sample rows. For the data model, relationships, and example business questions, see `backend/bigquery/README_DATA_MODEL.md`.
+
+### 3. Verify
+
+- In [BigQuery console](https://console.cloud.google.com/bigquery): open your project → dataset → tables.
+- Or call the API: `GET http://localhost:8000/bigquery/tables` (with backend running and `.env` set). It returns the list of tables in your POC dataset.
+
+### Tables (for insights)
+
+| Table         | Purpose |
+|---------------|--------|
+| `products`    | Product id, name, category, unit price |
+| `customers`   | Customer id, name, region, segment |
+| `orders`      | Order id, customer, date, status, total amount |
+| `order_items` | Line items: order, product, quantity, price |
+| `sales_daily` | Pre-aggregated daily sales by product and region |
+
+Example questions you can answer later with the agent: *“What were total sales by region last month?”*, *“Top 5 products by revenue?”*, *“Orders by customer segment?”*.
+
+---
+
 ## Quick reference (from spec)
 
 - **Frontend:** Next.js (React) + Tailwind CSS  
@@ -80,4 +138,4 @@ App: http://localhost:3000
 
 ---
 
-*Last updated: when we complete or change a step.*
+*Last updated: roadmap reviewed; steps 1–3 and 6 done; next: step 4 (Gemini).*
