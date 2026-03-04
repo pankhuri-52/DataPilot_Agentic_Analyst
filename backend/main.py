@@ -1,15 +1,16 @@
 """
 DataPilot backend – FastAPI app.
-Health check and CORS for frontend; agents and Gemini in later steps.
+Health check and CORS; Gemini test endpoint; agents in later steps.
 """
 import os
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
 
-# Load .env from project root if present
+# Load .env from project root (parent of backend/) if present
 from pathlib import Path
-_root = Path(__file__).resolve().parents[1]
-_env = _root.parent / ".env"
+_backend_dir = Path(__file__).resolve().parent
+_project_root = _backend_dir.parent
+_env = _project_root / ".env"
 if _env.exists():
     from dotenv import load_dotenv
     load_dotenv(_env)
@@ -41,16 +42,28 @@ def root():
     return {"message": "DataPilot API", "docs": "/docs"}
 
 
+def _resolve_credentials_path():
+    """Resolve GOOGLE_APPLICATION_CREDENTIALS to an absolute path (project root if relative)."""
+    path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+    if not path:
+        return
+    p = Path(path)
+    if not p.is_absolute():
+        p = _project_root / path
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(p.resolve())
+
+
 @app.get("/bigquery/tables")
 def bigquery_tables():
     """List BigQuery POC tables if BIGQUERY_PROJECT_ID and BIGQUERY_DATASET are set."""
     project_id = os.getenv("BIGQUERY_PROJECT_ID")
-    dataset_id = os.getenv("BIGQUERY_DATASET", "datapilot_poc")
+    dataset_id = os.getenv("BIGQUERY_DATASET", "retail_data")
     if not project_id or project_id == "your-gcp-project-id":
         raise HTTPException(
             status_code=503,
             detail="BigQuery not configured. Set BIGQUERY_PROJECT_ID and BIGQUERY_DATASET in .env",
         )
+    _resolve_credentials_path()
     try:
         from google.cloud import bigquery
         client = bigquery.Client(project=project_id)
@@ -63,3 +76,27 @@ def bigquery_tables():
         }
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"BigQuery error: {str(e)}")
+
+
+# First API endpoint – Gemini test ----
+@app.post("/llm/chat")
+def llm_chat(body: dict = Body(default={"message": "Hello! What can you help me with?"})):
+    """
+    Basic Gemini test: send a message, get a reply.
+    Flow: Frontend/Postman → POST /llm/chat → this function → llm.get_gemini() → Gemini API → response.
+    """
+
+    # If there is no message, use the default message
+    message = (body or {}).get("message", "Hello! What can you help me with?")
+    try:
+        from llm import get_gemini
+        model = get_gemini()
+        response = model.invoke(message)
+        content = response.content if hasattr(response, "content") else str(response)
+        return {"reply": content}
+        # print("Calling llm_chat api")
+        # return {"reply": "Hello! What can you help me with?"}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"LLM error: {str(e)}")

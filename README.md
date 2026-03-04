@@ -12,7 +12,8 @@ This doc tracks setup and progress for the DataPilot hackathon POC.
 
 1. Create a `.env` file in the project root (see `.env.example`).
 2. Add your key there, e.g. `GOOGLE_API_KEY=your_key_here`.
-3. Ensure `.env` is in `.gitignore` so it is never committed.
+3. Optionally set `GEMINI_MODEL=gemini-2.5-flash` (default) or another model like `gemini-2.5-flash-lite`.
+4. Ensure `.env` is in `.gitignore` so it is never committed.
 
 Your Google API key will be used for **Gemini** (LLM for agents) and optionally **BigQuery** (if you use BigQuery for the POC).
 
@@ -27,7 +28,7 @@ We’ll follow this order and update the progress section below as we go.
 | 1 | **Environment setup** – Create `.env` from `.env.example`, add `GOOGLE_API_KEY`, verify Node + Python | ✅ Done |
 | 2 | **Project structure** – Create `backend/` (FastAPI), `frontend/` (Next.js), `docs/` if needed | ✅ Done |
 | 3 | **Backend skeleton** – FastAPI app, health check, CORS for frontend | ✅ Done |
-| 4 | **Gemini integration** – Call Gemini API from backend (e.g. one test endpoint) | ⬜ Pending |
+| 4 | **Gemini integration** – Call Gemini API from backend (e.g. one test endpoint) | ✅ Done |
 | 5 | **Agent orchestration** – Introduce LangGraph (or minimal agent flow): Planner → Data Discovery → Execution/Validation | ⬜ Pending |
 | 6 | **BigQuery (optional for POC)** – DDL + INSERT scripts ready; create dataset/tables and load data in BigQuery console | ✅ Done |
 | 7 | **Frontend skeleton** – Next.js + Tailwind, one page with a text input for “ask a question” | ⬜ Pending |
@@ -39,7 +40,7 @@ We’ll follow this order and update the progress section below as we go.
 
 ## What to do next
 
-**Next step: 4 – Gemini integration.** Add a test endpoint in the backend that calls the Gemini API (using `GOOGLE_API_KEY` from `.env`). After that, do step 5 (agent orchestration with LangGraph) or step 7 (frontend "ask a question" input), then step 8 (connect UI to backend).
+**Next step: 5 or 7.** Step 4 done: `POST /llm/chat` calls Gemini. Next: step 5 (agent orchestration with LangGraph) or step 7 (frontend "ask a question" input), then step 8 (connect UI to backend).
 
 ---
 
@@ -52,7 +53,8 @@ We’ll follow this order and update the progress section below as we go.
 - **Step 1 done** – `.env` created and configured; environment ready.
 - **Step 2 done** – `backend/` (FastAPI + health check + CORS) and `frontend/` (Next.js + Tailwind, App Router, `src/`) created with base files.
 - **Step 3 done** – Backend skeleton in place (`main.py` with `/health`, CORS for frontend).
-- **Step 6 (BigQuery POC)** – DDL and INSERT scripts in `backend/bigquery/`: use `01_ddl.sql` and `02_inserts.sql` in the BigQuery console (replace `YOUR_PROJECT_ID` and `YOUR_DATASET_ID`). See `backend/bigquery/README_DATA_MODEL.md` for data model and example queries. Use `GET /bigquery/tables` to verify.
+- **Step 4 done** – Gemini integration via `backend/llm.py`; `POST /llm/chat` calls Gemini (default model: `gemini-2.5-flash`). Verified working.
+- **Step 6 (BigQuery POC)** – DDL and INSERT scripts in `backend/bigquery/scripts/`: use `01_ddl.sql` and `02_inserts.sql` in the BigQuery console (replace `YOUR_PROJECT_ID` and `YOUR_DATASET_ID`). See `backend/bigquery/scripts/README_DATA_MODEL.md` for data model and example queries. Use `GET /bigquery/tables` to verify.
 
 ---
 
@@ -65,6 +67,12 @@ pip install -r requirements.txt
 uvicorn main:app --reload
 ```
 API: http://localhost:8000 — Docs: http://localhost:8000/docs
+
+**Test the first API endpoint (step 4 – Gemini)**  
+With the backend running and `GOOGLE_API_KEY` in `.env`:
+- **Swagger UI:** Open http://localhost:8000/docs → find `POST /llm/chat` → "Try it out" → send `{"message": "Hello!"}` → Execute.
+- **curl:** `curl -X POST http://localhost:8000/llm/chat -H "Content-Type: application/json" -d "{\"message\": \"Hello!\"}"`
+- **PowerShell:** `Invoke-RestMethod -Uri "http://localhost:8000/llm/chat" -Method Post -Body '{"message":"Hello!"}' -ContentType "application/json"`
 
 **Frontend**
 ```bash
@@ -103,10 +111,10 @@ To get **good insights** from the agent later, set up BigQuery and load sample d
 ### 2. Create dataset, tables, and load sample data (manual in BigQuery)
 
 1. In the [BigQuery console](https://console.cloud.google.com/bigquery), create a dataset (e.g. `customer_data`) in your project.
-2. Open `backend/bigquery/01_ddl.sql`, replace `YOUR_PROJECT_ID` and `YOUR_DATASET_ID` with your project and dataset, then run the full script to create tables.
-3. Open `backend/bigquery/02_inserts.sql`, make the same replacement, then run the INSERTs in order: **products** → **customers** → **orders** → **order_items** → **sales_daily** (the last is an `INSERT...SELECT` from the others).
+2. Open `backend/bigquery/scripts/01_ddl.sql`, replace `YOUR_PROJECT_ID` and `YOUR_DATASET_ID` with your project and dataset, then run the full script to create tables.
+3. Open `backend/bigquery/scripts/02_inserts.sql`, make the same replacement, then run the INSERTs in order: **products** → **customers** → **orders** → **order_items** → **sales_daily** (the last is an `INSERT...SELECT` from the others).
 
-This gives you: **products**, **customers**, **orders**, **order_items**, **sales_daily** with sample rows. For the data model, relationships, and example business questions, see `backend/bigquery/README_DATA_MODEL.md`.
+This gives you: **products**, **customers**, **orders**, **order_items**, **sales_daily** with sample rows. For the data model, relationships, and example business questions, see `backend/bigquery/scripts/README_DATA_MODEL.md`.
 
 ### 3. Verify
 
@@ -132,10 +140,10 @@ Example questions you can answer later with the agent: *“What were total sales
 - **Frontend:** Next.js (React) + Tailwind CSS  
 - **Backend:** Python FastAPI  
 - **Orchestration:** LangGraph (multi-agent state machine)  
-- **LLM:** Gemini (via your Google API key)  
+- **LLM:** Gemini (via your Google API key; default model: `gemini-2.5-flash`)  
 - **Data:** BigQuery metadata + query APIs (optional for initial POC)  
 - **Deploy (later):** Frontend on Vercel, backend on Railway / Render  
 
 ---
 
-*Last updated: roadmap reviewed; steps 1–3 and 6 done; next: step 4 (Gemini).*
+*Last updated: step 4 done – Gemini integration (`llm.py`, `POST /llm/chat` with `gemini-2.5-flash`); BigQuery scripts in `backend/bigquery/scripts/`; next: step 5 or 7.*
