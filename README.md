@@ -31,16 +31,16 @@ We’ll follow this order and update the progress section below as we go.
 | 4 | **Gemini integration** – Call Gemini API from backend (e.g. one test endpoint) | ✅ Done |
 | 5 | **Agent orchestration** – Introduce LangGraph (or minimal agent flow): Planner → Data Discovery → Execution/Validation | ✅ Done |
 | 6 | **BigQuery (optional for POC)** – DDL + INSERT scripts ready; create dataset/tables and load data in BigQuery console | ✅ Done |
-| 7 | **Frontend skeleton** – Next.js + Tailwind, one page with a text input for “ask a question” | ⬜ Pending |
-| 8 | **Connect UI to backend** – Submit question, show agent response and simple trace | ⬜ Pending |
-| 9 | **Agent trace UI** – Show step-by-step reasoning and decisions | ⬜ Pending |
+| 7 | **Frontend skeleton** – Next.js + Tailwind + shadcn/ui, one page with a text input for “ask a question” | ✅ Done |
+| 8 | **Connect UI to backend** – Submit question, show agent response and simple trace | ✅ Done |
+| 9 | **Agent trace UI** – Show step-by-step reasoning and decisions | ✅ Done |
 | 10 | **Polish** – Basic charts, cost estimate display, guardrails messaging | ⬜ Pending |
 
 ---
 
 ## What to do next
 
-**Next step: 7.** Step 5 done: LangGraph agent flow (Planner → Discovery → Executor → Validator → Visualization) with `POST /ask`. Next: step 7 (frontend "ask a question" input), then step 8 (connect UI to backend).
+**Next step: 10.** Steps 7–9 done: Frontend with shadcn/ui, connected to `POST /ask`, agent trace UI. Next: step 10 (charts, cost estimate, guardrails).
 
 ---
 
@@ -56,6 +56,7 @@ We’ll follow this order and update the progress section below as we go.
 - **Step 4 done** – Gemini integration via `backend/llm.py`; `POST /llm/chat` calls Gemini (default model: `gemini-2.5-flash`). Verified working.
 - **Step 5 done** – LangGraph agent orchestration in `backend/agents/`: Planner → Discovery → Executor → Validator → Visualization. `POST /ask` runs the full pipeline and returns plan, feasibility, results, chart_spec, explanation, and trace.
 - **Step 6 (BigQuery POC)** – DDL and INSERT scripts in `backend/bigquery/scripts/`: use `01_ddl.sql` and `02_inserts.sql` in the BigQuery console (replace `YOUR_PROJECT_ID` and `YOUR_DATASET_ID`). See `backend/bigquery/scripts/README_DATA_MODEL.md` for data model and example queries. Use `GET /bigquery/tables` to verify.
+- **Steps 7–9 done** – Frontend with shadcn/ui (Input, Button, Card, Accordion, Table, Alert, Badge, Skeleton). Connected to `POST /ask`; displays results, explanation, agent trace, and feasibility badges.
 
 ---
 
@@ -138,7 +139,7 @@ Example questions you can answer later with the agent: *“What were total sales
 
 ## Quick reference (from spec)
 
-- **Frontend:** Next.js (React) + Tailwind CSS  
+- **Frontend:** Next.js (React) + Tailwind CSS + shadcn/ui  
 - **Backend:** Python FastAPI  
 - **Orchestration:** LangGraph (multi-agent state machine)  
 - **LLM:** Gemini (via your Google API key; default model: `gemini-2.5-flash`)  
@@ -147,4 +148,4 @@ Example questions you can answer later with the agent: *“What were total sales
 
 ---
 
-*Last updated: step 5 done – LangGraph agent orchestration (`backend/agents/`, `POST /ask`); next: step 7 (frontend skeleton).*
+*Last updated: steps 7–9 done – Frontend with shadcn/ui, connected to `POST /ask`, agent trace UI; next: step 10 (polish).*
