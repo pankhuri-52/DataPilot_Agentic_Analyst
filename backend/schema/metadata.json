@@ -1,0 +1,68 @@
+{
+  "dataset": "retail_data",
+  "description": "Retail/B2B sales data: products, customers, orders, order_items, sales_daily",
+  "tables": [
+    {
+      "name": "products",
+      "description": "Product dimension. One row per product in the catalog.",
+      "columns": [
+        {"name": "product_id", "type": "STRING", "description": "Primary key. Unique product identifier."},
+        {"name": "name", "type": "STRING", "description": "Display name of the product."},
+        {"name": "category", "type": "STRING", "description": "Product category (Electronics, Home, Furniture, Office)."},
+        {"name": "unit_price", "type": "NUMERIC", "description": "Price per unit in currency."},
+        {"name": "created_at", "type": "TIMESTAMP", "description": "When the record was created."}
+      ]
+    },
+    {
+      "name": "customers",
+      "description": "Customer dimension. One row per B2B customer.",
+      "columns": [
+        {"name": "customer_id", "type": "STRING", "description": "Primary key. Unique customer identifier."},
+        {"name": "name", "type": "STRING", "description": "Customer/company name."},
+        {"name": "region", "type": "STRING", "description": "Sales region (North, South, East, West)."},
+        {"name": "segment", "type": "STRING", "description": "Customer segment (Enterprise, SMB, Startup)."},
+        {"name": "created_at", "type": "TIMESTAMP", "description": "When the record was created."}
+      ]
+    },
+    {
+      "name": "orders",
+      "description": "Order header. One row per order; links to customers. Detail lines in order_items.",
+      "columns": [
+        {"name": "order_id", "type": "STRING", "description": "Primary key. Unique order identifier."},
+        {"name": "customer_id", "type": "STRING", "description": "Foreign key to customers.customer_id."},
+        {"name": "order_date", "type": "DATE", "description": "Date the order was placed."},
+        {"name": "status", "type": "STRING", "description": "Order status (completed, pending, cancelled)."},
+        {"name": "total_amount", "type": "NUMERIC", "description": "Order total in currency."},
+        {"name": "created_at", "type": "TIMESTAMP", "description": "When the record was created."}
+      ]
+    },
+    {
+      "name": "order_items",
+      "description": "Order line items. One row per product per order; links orders to products.",
+      "columns": [
+        {"name": "order_id", "type": "STRING", "description": "Foreign key to orders.order_id."},
+        {"name": "product_id", "type": "STRING", "description": "Foreign key to products.product_id."},
+        {"name": "quantity", "type": "INT64", "description": "Number of units ordered."},
+        {"name": "unit_price", "type": "NUMERIC", "description": "Price per unit at time of order."},
+        {"name": "line_total", "type": "NUMERIC", "description": "quantity * unit_price for this line."}
+      ]
+    },
+    {
+      "name": "sales_daily",
+      "description": "Daily sales summary by product and region. Use for fast reporting without joining orders/order_items.",
+      "columns": [
+        {"name": "date", "type": "DATE", "description": "Calendar date of sales."},
+        {"name": "product_id", "type": "STRING", "description": "Foreign key to products.product_id."},
+        {"name": "region", "type": "STRING", "description": "Sales region (from customer on the order)."},
+        {"name": "units_sold", "type": "INT64", "description": "Total quantity sold that day for this product in this region."},
+        {"name": "revenue", "type": "NUMERIC", "description": "Total revenue for this (date, product_id, region)."}
+      ]
+    }
+  ],
+  "relationships": [
+    "orders.customer_id -> customers.customer_id",
+    "order_items.order_id -> orders.order_id",
+    "order_items.product_id -> products.product_id",
+    "sales_daily.product_id -> products.product_id"
+  ]
+}

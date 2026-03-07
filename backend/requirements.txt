@@ -9,3 +9,6 @@ google-cloud-bigquery>=3.14.0
 # Gemini LLM
 langchain-core>=0.3.0 # engine for our lanchain
 langchain-google-genai>=2.0.0 # Allows langchain to talk to Gemini
+
+# Agent orchestration
+langgraph>=0.2.0

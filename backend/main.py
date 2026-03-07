@@ -78,6 +78,51 @@ def bigquery_tables():
         raise HTTPException(status_code=503, detail=f"BigQuery error: {str(e)}")
 
 
+@app.get("/schema")
+def get_schema():
+    """Return static schema metadata for agents (tables, columns, types)."""
+    schema_path = _backend_dir / "schema" / "metadata.json"
+    if not schema_path.exists():
+        raise HTTPException(status_code=503, detail="Schema metadata not found")
+    import json
+    with open(schema_path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+@app.post("/ask")
+def ask(body: dict = Body(default={"query": ""})):
+    """
+    Submit a natural language question. Runs the multi-agent pipeline and returns
+    plan, data_feasibility, results, chart_spec, explanation, and trace.
+    """
+    query = (body or {}).get("query", "").strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="query is required")
+
+    try:
+        from agents.graph import get_graph
+        graph = get_graph()
+        initial_state = {"query": query, "trace": []}
+        final_state = graph.invoke(initial_state)
+
+        return {
+            "plan": final_state.get("plan"),
+            "data_feasibility": final_state.get("data_feasibility"),
+            "nearest_plan": final_state.get("nearest_plan"),
+            "missing_explanation": final_state.get("missing_explanation"),
+            "sql": final_state.get("sql"),
+            "results": final_state.get("raw_results"),
+            "validation_ok": final_state.get("validation_ok"),
+            "chart_spec": final_state.get("chart_spec"),
+            "explanation": final_state.get("explanation"),
+            "trace": final_state.get("trace", []),
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Agent error: {str(e)}")
+
+
 # First API endpoint – Gemini test ----
 @app.post("/llm/chat")
 def llm_chat(body: dict = Body(default={"message": "Hello! What can you help me with?"})):
