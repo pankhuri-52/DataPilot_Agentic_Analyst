@@ -55,6 +55,7 @@ export function DataPilotClient() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [response, setResponse] = useState<AskResponse | null>(null);
+  const [liveTrace, setLiveTrace] = useState<TraceEntry[]>([]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -63,9 +64,10 @@ export function DataPilotClient() {
     setLoading(true);
     setError(null);
     setResponse(null);
+    setLiveTrace([]);
 
     try {
-      const res = await fetch(`${API_BASE}/ask`, {
+      const res = await fetch(`${API_BASE}/ask/stream`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ query: query.trim() }),
@@ -76,8 +78,57 @@ export function DataPilotClient() {
         throw new Error(err.detail || `Request failed: ${res.status}`);
       }
 
-      const data: AskResponse = await res.json();
-      setResponse(data);
+      const reader = res.body?.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      if (!reader) {
+        throw new Error("No response body");
+      }
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n\n");
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          const dataMatch = line.match(/^data:\s*(.+)$/m);
+          if (!dataMatch) continue;
+
+          try {
+            const event = JSON.parse(dataMatch[1].trim());
+            if (event.type === "progress") {
+              setLiveTrace((prev) => [...prev, event.trace_entry]);
+            } else if (event.type === "complete") {
+              setResponse(event.response);
+            } else if (event.type === "error") {
+              setError(event.message ?? "Agent error");
+            }
+          } catch {
+            // Ignore parse errors for malformed chunks
+          }
+        }
+      }
+
+      // Process any remaining buffer
+      if (buffer.trim()) {
+        const dataMatch = buffer.match(/^data:\s*(.+)$/m);
+        if (dataMatch) {
+          try {
+            const event = JSON.parse(dataMatch[1].trim());
+            if (event.type === "complete") {
+              setResponse(event.response);
+            } else if (event.type === "error") {
+              setError(event.message ?? "Agent error");
+            }
+          } catch {
+            // Ignore
+          }
+        }
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong");
     } finally {
@@ -121,11 +172,44 @@ export function DataPilotClient() {
       {loading && (
         <Card>
           <CardHeader>
-            <Skeleton className="h-5 w-48" />
-            <Skeleton className="h-4 w-full" />
+            <CardTitle>Agent progress</CardTitle>
+            <CardDescription>
+              {liveTrace.length > 0
+                ? "Agents running in real time..."
+                : "Starting pipeline..."}
+            </CardDescription>
           </CardHeader>
           <CardContent>
-            <Skeleton className="h-32 w-full" />
+            {liveTrace.length > 0 ? (
+              <div className="space-y-2">
+                {liveTrace.map((entry, i) => (
+                  <div
+                    key={i}
+                    className="flex items-center gap-2 rounded-lg border p-3"
+                  >
+                    <Badge
+                      variant={
+                        entry.status === "success"
+                          ? "default"
+                          : entry.status === "error"
+                            ? "destructive"
+                            : "secondary"
+                      }
+                    >
+                      {entry.status}
+                    </Badge>
+                    <span className="font-medium">{entry.agent}</span>
+                    {entry.message && (
+                      <span className="text-muted-foreground text-sm truncate">
+                        — {entry.message}
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <Skeleton className="h-24 w-full" />
+            )}
           </CardContent>
         </Card>
       )}

@@ -35,6 +35,7 @@ We’ll follow this order and update the progress section below as we go.
 | 8 | **Connect UI to backend** – Submit question, show agent response and simple trace | ✅ Done |
 | 9 | **Agent trace UI** – Show step-by-step reasoning and decisions | ✅ Done |
 | 10 | **Polish** – Basic charts, cost estimate display, guardrails messaging | ⬜ Pending |
+| 11 | **Real-time agent logs** – SSE streaming of agent progress (planner → discovery → executor → validator → visualization) | ✅ Done |
 
 ---
 
@@ -57,6 +58,7 @@ We’ll follow this order and update the progress section below as we go.
 - **Step 5 done** – LangGraph agent orchestration in `backend/agents/`: Planner → Discovery → Executor → Validator → Visualization. `POST /ask` runs the full pipeline and returns plan, feasibility, results, chart_spec, explanation, and trace.
 - **Step 6 (BigQuery POC)** – DDL and INSERT scripts in `backend/bigquery/scripts/`: use `01_ddl.sql` and `02_inserts.sql` in the BigQuery console (replace `YOUR_PROJECT_ID` and `YOUR_DATASET_ID`). See `backend/bigquery/scripts/README_DATA_MODEL.md` for data model and example queries. Use `GET /bigquery/tables` to verify.
 - **Steps 7–9 done** – Frontend with shadcn/ui (Input, Button, Card, Accordion, Table, Alert, Badge, Skeleton). Connected to `POST /ask`; displays results, explanation, agent trace, and feasibility badges.
+- **Step 11 done** – Real-time agent progress: stream intermediate agent states (planner → discovery → executor → validator → visualization) to the UI via `POST /ask/stream`. Uses Server-Sent Events (SSE) over HTTP; users see live logs as each agent runs.
 
 ---
 
@@ -137,6 +139,17 @@ Example questions you can answer later with the agent: *“What were total sales
 
 ---
 
+## Key API endpoints
+
+| Endpoint | Description |
+|----------|-------------|
+| `POST /ask` | Submit a question; returns full response when pipeline completes (blocking). |
+| `POST /ask/stream` | Submit a question; streams real-time agent progress via SSE, then returns full response in final event. Use for live logs in the UI. |
+| `POST /llm/chat` | Basic Gemini test: send a message, get a reply. |
+| `GET /bigquery/tables` | List BigQuery POC tables (requires BigQuery config in `.env`). |
+
+---
+
 ## Quick reference (from spec)
 
 - **Frontend:** Next.js (React) + Tailwind CSS + shadcn/ui  
@@ -148,4 +161,4 @@ Example questions you can answer later with the agent: *“What were total sales
 
 ---
 
-*Last updated: steps 7–9 done – Frontend with shadcn/ui, connected to `POST /ask`, agent trace UI; next: step 10 (polish).*
+*Last updated: step 11 done – Real-time agent logs via `POST /ask/stream`; next: step 10 (polish).*

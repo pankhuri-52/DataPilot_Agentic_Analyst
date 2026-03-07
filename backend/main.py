@@ -2,9 +2,11 @@
 DataPilot backend – FastAPI app.
 Health check and CORS; Gemini test endpoint; agents in later steps.
 """
+import json
 import os
 from fastapi import FastAPI, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 
 # Load .env from project root (parent of backend/) if present
 from pathlib import Path
@@ -119,6 +121,71 @@ def ask(body: dict = Body(default={"query": ""})):
         }
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Agent error: {str(e)}")
+
+
+async def _ask_stream_generator(query: str):
+    """Async generator that yields SSE events for real-time agent progress."""
+    try:
+        from agents.graph import get_graph
+
+        graph = get_graph()
+        initial_state = {"query": query, "trace": []}
+        prev_trace_len = 0
+        last_state = None
+
+        async for chunk in graph.astream(initial_state, stream_mode="values"):
+            last_state = chunk
+            trace = chunk.get("trace") or []
+            for i in range(prev_trace_len, len(trace)):
+                entry = trace[i]
+                event = {
+                    "type": "progress",
+                    "agent": entry.get("agent", ""),
+                    "trace_entry": entry,
+                }
+                yield f"data: {json.dumps(event)}\n\n"
+            prev_trace_len = len(trace)
+
+        if last_state is not None:
+            response = {
+                "plan": last_state.get("plan"),
+                "data_feasibility": last_state.get("data_feasibility"),
+                "nearest_plan": last_state.get("nearest_plan"),
+                "missing_explanation": last_state.get("missing_explanation"),
+                "sql": last_state.get("sql"),
+                "results": last_state.get("raw_results"),
+                "validation_ok": last_state.get("validation_ok"),
+                "chart_spec": last_state.get("chart_spec"),
+                "explanation": last_state.get("explanation"),
+                "trace": last_state.get("trace", []),
+            }
+            yield f"data: {json.dumps({'type': 'complete', 'response': response})}\n\n"
+    except Exception as e:
+        yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+
+
+@app.post("/ask/stream")
+async def ask_stream(body: dict = Body(default={"query": ""})):
+    """
+    Submit a natural language question. Streams real-time agent progress via SSE,
+    then returns the full response in the final event.
+    """
+    query = (body or {}).get("query", "").strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="query is required")
+
+    try:
+        return StreamingResponse(
+            _ask_stream_generator(query),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Agent error: {str(e)}")
 
