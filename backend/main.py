@@ -122,7 +122,15 @@ def ask(body: dict = Body(default={"query": ""})):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=503, detail=f"Agent error: {str(e)}")
+        err_msg = str(e)
+        if "RESOURCE_EXHAUSTED" in err_msg or "429" in err_msg:
+            err_msg = (
+                "Gemini API quota exceeded. The free tier allows 20 requests per day. "
+                "Options: (1) Wait until your quota resets tomorrow, "
+                "(2) Try GEMINI_MODEL=gemini-2.5-flash-lite in .env (may have separate quota), "
+                "(3) Enable billing at https://console.cloud.google.com for higher limits."
+            )
+        raise HTTPException(status_code=503, detail=err_msg)
 
 
 async def _ask_stream_generator(query: str):
@@ -163,7 +171,15 @@ async def _ask_stream_generator(query: str):
             }
             yield f"data: {json.dumps({'type': 'complete', 'response': response})}\n\n"
     except Exception as e:
-        yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+        err_msg = str(e)
+        if "RESOURCE_EXHAUSTED" in err_msg or "429" in err_msg:
+            err_msg = (
+                "Gemini API quota exceeded. The free tier allows 20 requests per day. "
+                "Options: (1) Wait until your quota resets tomorrow, "
+                "(2) Try GEMINI_MODEL=gemini-2.5-flash-lite in .env (may have separate quota), "
+                "(3) Enable billing at https://console.cloud.google.com for higher limits."
+            )
+        yield f"data: {json.dumps({'type': 'error', 'message': err_msg})}\n\n"
 
 
 @app.post("/ask/stream")

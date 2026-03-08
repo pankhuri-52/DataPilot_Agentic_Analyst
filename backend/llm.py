@@ -14,6 +14,6 @@ def get_gemini():
             "Get a key at https://aistudio.google.com/apikey"
         )
     from langchain_google_genai import ChatGoogleGenerativeAI
-    model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
-    # max_retries=1: no retries on 429 – fail fast instead of burning more quota (0 = SDK default 5 retries!)
+    # gemini-2.5-flash-lite uses less quota; gemini-2.5-flash free tier = 20 req/day
+    model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
     return ChatGoogleGenerativeAI(model=model, api_key=api_key, max_retries=1)

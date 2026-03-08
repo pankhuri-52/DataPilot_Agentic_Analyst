@@ -1,27 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import {
-  Accordion,
-  AccordionContent,
-  AccordionItem,
-  AccordionTrigger,
-} from "@/components/ui/accordion";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
-import { Skeleton } from "@/components/ui/skeleton";
-import { AlertCircle, Loader2 } from "lucide-react";
+import { AlertCircle, Send, Loader2 } from "lucide-react";
+import { StepLoader } from "./StepLoader";
+import { PlanCard } from "./PlanCard";
+import { ArtifactCard } from "./ArtifactCard";
+import { cn } from "@/lib/utils";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -50,21 +37,69 @@ interface AskResponse {
   trace?: TraceEntry[];
 }
 
+interface Message {
+  id: string;
+  role: "user" | "assistant";
+  content?: string;
+  loading?: boolean;
+  error?: string;
+  plan?: Record<string, unknown>;
+  liveTrace?: TraceEntry[];
+  response?: AskResponse;
+}
+
+function extractPlanFromTrace(trace: TraceEntry[]): Record<string, unknown> | undefined {
+  const plannerEntry = trace.find((e) => e.agent === "planner");
+  if (!plannerEntry?.output) return undefined;
+  const o = plannerEntry.output as Record<string, unknown>;
+  if (o.metrics && Array.isArray(o.metrics)) {
+    return {
+      metrics: o.metrics,
+      dimensions: (o.dimensions as string[]) ?? [],
+      filters: (o.filters as Record<string, unknown>) ?? {},
+      is_valid: o.is_valid,
+    };
+  }
+  return undefined;
+}
+
 export function DataPilotClient() {
   const [query, setQuery] = useState("");
+  const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [response, setResponse] = useState<AskResponse | null>(null);
-  const [liveTrace, setLiveTrace] = useState<TraceEntry[]>([]);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!query.trim()) return;
 
+    const userMessage: Message = {
+      id: crypto.randomUUID(),
+      role: "user",
+      content: query.trim(),
+    };
+    setMessages((prev) => [...prev, userMessage]);
+    setQuery("");
     setLoading(true);
     setError(null);
-    setResponse(null);
-    setLiveTrace([]);
+
+    const assistantMessageId = crypto.randomUUID();
+    const assistantMessage: Message = {
+      id: assistantMessageId,
+      role: "assistant",
+      loading: true,
+      liveTrace: [],
+    };
+    setMessages((prev) => [...prev, assistantMessage]);
 
     try {
       const res = await fetch(`${API_BASE}/ask/stream`, {
@@ -101,28 +136,82 @@ export function DataPilotClient() {
           try {
             const event = JSON.parse(dataMatch[1].trim());
             if (event.type === "progress") {
-              setLiveTrace((prev) => [...prev, event.trace_entry]);
+              setMessages((prev) =>
+                prev.map((m) => {
+                  if (m.id !== assistantMessageId) return m;
+                  const newTrace = [...(m.liveTrace ?? []), event.trace_entry];
+                  const extractedPlan = extractPlanFromTrace(newTrace);
+                  return {
+                    ...m,
+                    liveTrace: newTrace,
+                    plan: m.plan ?? extractedPlan ?? undefined,
+                  };
+                })
+              );
             } else if (event.type === "complete") {
-              setResponse(event.response);
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantMessageId
+                    ? {
+                        ...m,
+                        loading: false,
+                        liveTrace: event.response?.trace ?? m.liveTrace,
+                        response: event.response,
+                        plan: event.response?.plan ?? m.plan,
+                      }
+                    : m
+                )
+              );
             } else if (event.type === "error") {
-              setError(event.message ?? "Agent error");
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantMessageId
+                    ? {
+                        ...m,
+                        loading: false,
+                        error: event.message ?? "Agent error",
+                      }
+                    : m
+                )
+              );
             }
           } catch {
-            // Ignore parse errors for malformed chunks
+            // Ignore parse errors
           }
         }
       }
 
-      // Process any remaining buffer
       if (buffer.trim()) {
         const dataMatch = buffer.match(/^data:\s*(.+)$/m);
         if (dataMatch) {
           try {
             const event = JSON.parse(dataMatch[1].trim());
             if (event.type === "complete") {
-              setResponse(event.response);
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantMessageId
+                    ? {
+                        ...m,
+                        loading: false,
+                        liveTrace: event.response?.trace ?? m.liveTrace,
+                        response: event.response,
+                        plan: event.response?.plan ?? m.plan,
+                      }
+                    : m
+                )
+              );
             } else if (event.type === "error") {
-              setError(event.message ?? "Agent error");
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantMessageId
+                    ? {
+                        ...m,
+                        loading: false,
+                        error: event.message ?? "Agent error",
+                      }
+                    : m
+                )
+              );
             }
           } catch {
             // Ignore
@@ -131,236 +220,179 @@ export function DataPilotClient() {
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong");
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === assistantMessageId
+            ? {
+                ...m,
+                loading: false,
+                error: err instanceof Error ? err.message : "Something went wrong",
+              }
+            : m
+        )
+      );
     } finally {
       setLoading(false);
     }
   }
 
-  const results = response?.results;
-  const columns = results && results.length > 0 ? Object.keys(results[0]) : [];
-
   return (
-    <div className="space-y-6">
-      <form onSubmit={handleSubmit} className="flex gap-2">
-        <Input
-          placeholder="Ask a question about your data..."
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          disabled={loading}
-          className="flex-1"
-        />
-        <Button type="submit" disabled={loading}>
-          {loading ? (
-            <>
-              <Loader2 className="size-4 animate-spin" />
-              Asking...
-            </>
-          ) : (
-            "Ask"
-          )}
-        </Button>
-      </form>
+    <div className="flex flex-col">
+      <div className="space-y-6 pb-24">
+        {messages.length === 0 && (
+          <div className="flex flex-col items-center justify-center py-16 text-center">
+            <p className="text-sm text-muted-foreground">
+              Ask a question about your connected data sources.
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground/80">
+              Try: &quot;What were total sales by region last month?&quot;
+            </p>
+          </div>
+        )}
 
-      {error && (
-        <Alert variant="destructive">
-          <AlertCircle className="size-4" />
-          <AlertTitle>Error</AlertTitle>
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
-      )}
-
-      {loading && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Agent progress</CardTitle>
-            <CardDescription>
-              {liveTrace.length > 0
-                ? "Agents running in real time..."
-                : "Starting pipeline..."}
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            {liveTrace.length > 0 ? (
-              <div className="space-y-2">
-                {liveTrace.map((entry, i) => (
-                  <div
-                    key={i}
-                    className="flex items-center gap-2 rounded-lg border p-3"
-                  >
-                    <Badge
-                      variant={
-                        entry.status === "success"
-                          ? "default"
-                          : entry.status === "error"
-                            ? "destructive"
-                            : "secondary"
-                      }
-                    >
-                      {entry.status}
-                    </Badge>
-                    <span className="font-medium">{entry.agent}</span>
-                    {entry.message && (
-                      <span className="text-muted-foreground text-sm truncate">
-                        — {entry.message}
-                      </span>
-                    )}
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <Skeleton className="h-24 w-full" />
+        {messages.map((message) => (
+          <div
+            key={message.id}
+            className={cn(
+              "flex animate-in fade-in slide-up duration-200",
+              message.role === "user" ? "justify-end" : "justify-start"
             )}
-          </CardContent>
-        </Card>
-      )}
+          >
+            <div
+              className={cn(
+                "max-w-[85%] sm:max-w-[75%]",
+                message.role === "user" ? "order-2" : "order-1 w-full"
+              )}
+            >
+              {message.role === "user" ? (
+                <div className="rounded-2xl rounded-br-md bg-primary px-4 py-3 text-primary-foreground">
+                  <p className="text-sm leading-relaxed">{message.content}</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {message.error && (
+                    <Alert variant="destructive" className="rounded-lg">
+                      <AlertCircle className="size-4" />
+                      <AlertTitle>Error</AlertTitle>
+                      <AlertDescription>{message.error}</AlertDescription>
+                    </Alert>
+                  )}
 
-      {response && !loading && (
-        <>
-          {response.data_feasibility && (
-            <div className="flex gap-2 items-center">
-              <span className="text-sm text-muted-foreground">Data feasibility:</span>
-              <Badge
-                variant={
-                  response.data_feasibility === "full"
-                    ? "default"
-                    : response.data_feasibility === "partial"
-                      ? "secondary"
-                      : "destructive"
-                }
-              >
-                {response.data_feasibility}
-              </Badge>
-              {response.validation_ok !== undefined && (
-                <Badge variant={response.validation_ok ? "default" : "destructive"}>
-                  {response.validation_ok ? "Validated" : "Validation failed"}
-                </Badge>
+                  {message.loading && (
+                    <div className="space-y-4">
+                      {message.plan && (
+                        <PlanCard plan={message.plan} />
+                      )}
+                      <StepLoader
+                        liveTrace={message.liveTrace ?? []}
+                        isLoading={message.loading}
+                      />
+                    </div>
+                  )}
+
+                  {message.response && !message.loading && (
+                    <div className="space-y-4">
+                      {(message.plan ?? message.response?.plan) && (
+                        <PlanCard plan={message.plan ?? message.response?.plan ?? {}} />
+                      )}
+                      {(message.response.trace ?? message.liveTrace ?? []).length > 0 && (
+                        <StepLoader
+                          liveTrace={message.response.trace ?? message.liveTrace ?? []}
+                          isLoading={false}
+                        />
+                      )}
+                      {message.response.missing_explanation && (
+                        <Alert className="rounded-lg">
+                          <AlertTitle>Partial data</AlertTitle>
+                          <AlertDescription>
+                            {message.response.missing_explanation}
+                          </AlertDescription>
+                        </Alert>
+                      )}
+                      {message.response.results &&
+                        message.response.results.length > 0 && (
+                          <ArtifactCard
+                            title={
+                              message.response.chart_spec?.title || "Results"
+                            }
+                            explanation={message.response.explanation}
+                            chartSpec={message.response.chart_spec}
+                            results={message.response.results}
+                            sql={message.response.sql}
+                            dataFeasibility={message.response.data_feasibility}
+                            validationOk={message.response.validation_ok}
+                          />
+                        )}
+                      {message.response.results?.length === 0 &&
+                        message.response.explanation && (
+                          <div className="rounded-lg border border-border bg-card p-4">
+                            <p className="text-sm text-muted-foreground">
+                              {message.response.explanation}
+                            </p>
+                          </div>
+                        )}
+                    </div>
+                  )}
+
+                  {message.error && !message.loading && !message.response && (
+                    <div className="space-y-4">
+                      {(message.plan ?? extractPlanFromTrace(message.liveTrace ?? [])) && (
+                        <PlanCard plan={message.plan ?? extractPlanFromTrace(message.liveTrace ?? []) ?? {}} />
+                      )}
+                      {message.liveTrace && message.liveTrace.length > 0 && (
+                        <StepLoader
+                          liveTrace={message.liveTrace}
+                          isLoading={false}
+                        />
+                      )}
+                    </div>
+                  )}
+                </div>
               )}
             </div>
-          )}
+          </div>
+        ))}
 
-          {response.missing_explanation && (
-            <Alert>
-              <AlertTitle>Partial data</AlertTitle>
-              <AlertDescription>{response.missing_explanation}</AlertDescription>
-            </Alert>
-          )}
+        {error && (
+          <Alert variant="destructive" className="rounded-lg">
+            <AlertCircle className="size-4" />
+            <AlertTitle>Error</AlertTitle>
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        )}
 
-          {response.explanation && (
-            <Card>
-              <CardHeader>
-                <CardTitle>Insight</CardTitle>
-                <CardDescription>{response.explanation}</CardDescription>
-              </CardHeader>
-            </Card>
-          )}
+        <div ref={messagesEndRef} />
+      </div>
 
-          {results && results.length > 0 && (
-            <Card>
-              <CardHeader>
-                <CardTitle>
-                  {response.chart_spec?.title || "Results"}
-                </CardTitle>
-                <CardDescription>
-                  {response.chart_spec?.chart_type && (
-                    <Badge variant="outline" className="mr-2">
-                      {response.chart_spec.chart_type}
-                    </Badge>
-                  )}
-                  {response.sql && (
-                    <details className="mt-2">
-                      <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
-                        View SQL
-                      </summary>
-                      <pre className="mt-2 p-3 rounded-lg bg-muted text-xs overflow-x-auto">
-                        {response.sql}
-                      </pre>
-                    </details>
-                  )}
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      {columns.map((col) => (
-                        <TableHead key={col}>{col}</TableHead>
-                      ))}
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {results.slice(0, 50).map((row, i) => (
-                      <TableRow key={i}>
-                        {columns.map((col) => (
-                          <TableCell key={col}>
-                            {String(row[col] ?? "")}
-                          </TableCell>
-                        ))}
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-                {results.length > 50 && (
-                  <p className="mt-2 text-sm text-muted-foreground">
-                    Showing first 50 of {results.length} rows
-                  </p>
-                )}
-              </CardContent>
-            </Card>
-          )}
-
-          {response.trace && response.trace.length > 0 && (
-            <Card>
-              <CardHeader>
-                <CardTitle>Agent trace</CardTitle>
-                <CardDescription>
-                  Step-by-step reasoning and decisions
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <Accordion className="w-full">
-                  {response.trace.map((entry, i) => (
-                    <AccordionItem key={i} value={`trace-${i}`}>
-                      <AccordionTrigger>
-                        <span className="flex items-center gap-2">
-                          <Badge
-                            variant={
-                              entry.status === "success"
-                                ? "default"
-                                : entry.status === "error"
-                                  ? "destructive"
-                                  : "secondary"
-                            }
-                          >
-                            {entry.status}
-                          </Badge>
-                          {entry.agent}
-                          {entry.message && (
-                            <span className="text-muted-foreground font-normal truncate max-w-[200px]">
-                              — {entry.message}
-                            </span>
-                          )}
-                        </span>
-                      </AccordionTrigger>
-                      <AccordionContent>
-                        {entry.output && (
-                          <pre className="rounded-lg bg-muted p-3 text-xs overflow-x-auto">
-                            {JSON.stringify(entry.output, null, 2)}
-                          </pre>
-                        )}
-                        {!entry.output && entry.message && (
-                          <p className="text-sm text-muted-foreground">
-                            {entry.message}
-                          </p>
-                        )}
-                      </AccordionContent>
-                    </AccordionItem>
-                  ))}
-                </Accordion>
-              </CardContent>
-            </Card>
-          )}
-        </>
-      )}
+      <div className="fixed bottom-0 left-56 right-0 z-20 border-t border-border bg-background/95 px-4 py-4 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+        <div className="mx-auto max-w-4xl">
+          <form
+            onSubmit={handleSubmit}
+            className="flex gap-2 rounded-xl border border-border bg-muted/30 p-2 transition-colors focus-within:border-primary/50 focus-within:ring-2 focus-within:ring-primary/20"
+          >
+            <Input
+              placeholder="Ask a question about your data..."
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              disabled={loading}
+              className="min-h-[44px] flex-1 border-0 bg-transparent focus-visible:ring-0 focus-visible:ring-offset-0"
+            />
+            <Button
+              type="submit"
+              disabled={loading}
+              size="icon"
+              className="size-11 shrink-0 cursor-pointer rounded-lg"
+            >
+              {loading ? (
+                <Loader2 className="size-4 animate-spin" aria-hidden />
+              ) : (
+                <Send className="size-4" aria-hidden />
+              )}
+              <span className="sr-only">Send</span>
+            </Button>
+          </form>
+        </div>
+      </div>
     </div>
   );
 }
