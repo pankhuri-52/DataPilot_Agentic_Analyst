@@ -3,7 +3,9 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { MessageSquare, Database } from "lucide-react";
+import { MessageSquare, Database, LogIn, UserPlus, LogOut } from "lucide-react";
+import { useAuth } from "@/contexts/AuthContext";
+import { Button } from "@/components/ui/button";
 
 const navItems = [
   { href: "/", label: "Chat", icon: MessageSquare },
@@ -12,6 +14,7 @@ const navItems = [
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const { user, loading, signOut } = useAuth();
 
   return (
     <div className="flex min-h-screen">
@@ -42,6 +45,47 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             );
           })}
         </nav>
+        <div className="border-t border-sidebar-border p-4 space-y-2">
+          {!loading && (
+            <>
+              {user ? (
+                <div className="space-y-2">
+                  <p className="truncate text-xs text-muted-foreground" title={user.email}>
+                    {user.email}
+                  </p>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="w-full justify-start cursor-pointer"
+                    onClick={() => signOut()}
+                  >
+                    <LogOut className="size-4 mr-2" />
+                    Sign out
+                  </Button>
+                </div>
+              ) : (
+                <div className="flex flex-col gap-2">
+                  <Link href="/login">
+                    <Button variant="outline" size="sm" className="w-full" asChild>
+                      <span className="cursor-pointer">
+                        <LogIn className="size-4 mr-2" />
+                        Sign in
+                      </span>
+                    </Button>
+                  </Link>
+                  <Link href="/signup">
+                    <Button variant="ghost" size="sm" className="w-full" asChild>
+                      <span className="cursor-pointer">
+                        <UserPlus className="size-4 mr-2" />
+                        Sign up
+                      </span>
+                    </Button>
+                  </Link>
+                </div>
+              )}
+            </>
+          )}
+        </div>
       </aside>
       <main className="flex-1 pl-56">{children}</main>
     </div>

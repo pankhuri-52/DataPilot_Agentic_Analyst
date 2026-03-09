@@ -30,7 +30,7 @@
       "columns": [
         {"name": "order_id", "type": "STRING", "description": "Primary key. Unique order identifier."},
         {"name": "customer_id", "type": "STRING", "description": "Foreign key to customers.customer_id."},
-        {"name": "order_date", "type": "DATE", "description": "Date the order was placed."},
+        {"name": "order_date", "type": "DATE", "description": "Date the order was placed.", "data_range": {"min": "2024-01-01", "max": "2024-02-15"}},
         {"name": "status", "type": "STRING", "description": "Order status (completed, pending, cancelled)."},
         {"name": "total_amount", "type": "NUMERIC", "description": "Order total in currency."},
         {"name": "created_at", "type": "TIMESTAMP", "description": "When the record was created."}
@@ -51,7 +51,7 @@
       "name": "sales_daily",
       "description": "Daily sales summary by product and region. Use for fast reporting without joining orders/order_items.",
       "columns": [
-        {"name": "date", "type": "DATE", "description": "Calendar date of sales."},
+        {"name": "date", "type": "DATE", "description": "Calendar date of sales.", "data_range": {"min": "2024-01-01", "max": "2024-02-15"}},
         {"name": "product_id", "type": "STRING", "description": "Foreign key to products.product_id."},
         {"name": "region", "type": "STRING", "description": "Sales region (from customer on the order)."},
         {"name": "units_sold", "type": "INT64", "description": "Total quantity sold that day for this product in this region."},

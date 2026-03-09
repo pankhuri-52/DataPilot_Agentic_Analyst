@@ -4,13 +4,13 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Plus, Database, FileSpreadsheet, Trash2 } from "lucide-react";
+import { Plus, Database, FileSpreadsheet, Trash2, Server, Cloud } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface DataSource {
   id: string;
   name: string;
-  type: "bigquery" | "csv" | "postgres";
+  type: "bigquery" | "csv" | "postgres" | "mysql" | "mongodb";
   status: "connected" | "pending" | "error";
   lastSynced?: string;
 }
@@ -36,12 +36,16 @@ const typeLabels: Record<string, string> = {
   bigquery: "BigQuery",
   csv: "CSV",
   postgres: "PostgreSQL",
+  mysql: "MySQL",
+  mongodb: "MongoDB",
 };
 
 const typeIcons: Record<string, React.ElementType> = {
-  bigquery: Database,
+  bigquery: Cloud,
   csv: FileSpreadsheet,
-  postgres: Database,
+  postgres: Server,
+  mysql: Database,
+  mongodb: Database,
 };
 
 export default function SourcesPage() {
@@ -105,7 +109,7 @@ export default function SourcesPage() {
           ) : (
             <div className="space-y-4">
               {sources.map((source) => {
-                const Icon = typeIcons[source.type];
+                const Icon = typeIcons[source.type] ?? Database;
                 return (
                   <Card
                     key={source.id}

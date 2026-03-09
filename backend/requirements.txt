@@ -12,3 +12,9 @@ langchain-google-genai>=2.0.0 # Allows langchain to talk to Gemini
 
 # Agent orchestration
 langgraph>=0.2.0
+
+# Supabase (auth + chat persistence)
+supabase>=2.0.0
+
+# PostgreSQL (optional, for DATABASE_TYPE=postgres)
+psycopg2-binary>=2.9.0

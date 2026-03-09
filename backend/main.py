@@ -4,7 +4,7 @@ Health check and CORS; Gemini test endpoint; agents in later steps.
 """
 import json
 import os
-from fastapi import FastAPI, HTTPException, Body
+from fastapi import FastAPI, HTTPException, Body, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
@@ -42,6 +42,123 @@ def health():
 def root():
     """Root redirect to docs."""
     return {"message": "DataPilot API", "docs": "/docs"}
+
+
+# ---- Auth ----
+def _get_bearer_token(authorization: str | None = Header(default=None)) -> str | None:
+    """Extract Bearer token from Authorization header."""
+    if not authorization or not authorization.startswith("Bearer "):
+        return None
+    return authorization[7:].strip()
+
+
+def get_current_user_optional(authorization: str | None = Header(default=None)):
+    """Return current user if valid JWT present, else None."""
+    token = _get_bearer_token(authorization)
+    if not token:
+        return None
+    from auth import get_user_from_token
+    return get_user_from_token(token)
+
+
+@app.post("/auth/signup")
+def auth_signup(body: dict = Body(default={"email": "", "password": ""})):
+    """Create a new user. Returns user and access_token."""
+    email = (body or {}).get("email", "").strip()
+    password = (body or {}).get("password", "")
+    if not email or not password:
+        raise HTTPException(status_code=400, detail="email and password are required")
+    if len(password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+    try:
+        from auth import sign_up
+        return sign_up(email, password)
+    except ValueError as e:
+        if "must be set" in str(e).lower():
+            raise HTTPException(
+                status_code=503,
+                detail="Supabase not configured. Set SUPABASE_URL and SUPABASE_ANON_KEY in .env",
+            )
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Auth error: {str(e)}")
+
+
+@app.post("/auth/login")
+def auth_login(body: dict = Body(default={"email": "", "password": ""})):
+    """Sign in with email and password. Returns user and access_token."""
+    email = (body or {}).get("email", "").strip()
+    password = (body or {}).get("password", "")
+    if not email or not password:
+        raise HTTPException(status_code=400, detail="email and password are required")
+    try:
+        from auth import sign_in
+        return sign_in(email, password)
+    except ValueError as e:
+        if "must be set" in str(e).lower():
+            raise HTTPException(
+                status_code=503,
+                detail="Supabase not configured. Set SUPABASE_URL and SUPABASE_ANON_KEY in .env",
+            )
+        raise HTTPException(status_code=401, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Auth error: {str(e)}")
+
+
+@app.get("/auth/me")
+def auth_me(user=Depends(get_current_user_optional)):
+    """Return current user if valid JWT. Returns null if not authenticated."""
+    if user is None:
+        return {"user": None}
+    return {"user": user}
+
+
+# ---- Chat (conversations + messages) ----
+def _require_user(authorization: str | None = Header(default=None)):
+    """Dependency that requires authenticated user."""
+    user = get_current_user_optional(authorization)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    return user
+
+
+@app.get("/conversations")
+def list_conversations(user=Depends(_require_user)):
+    """List conversations for the current user."""
+    try:
+        from chat import list_conversations as _list
+        return {"conversations": _list(user["id"])}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Chat error: {str(e)}")
+
+
+@app.post("/conversations")
+def create_conversation(
+    body: dict = Body(default={"title": "New conversation"}),
+    user=Depends(_require_user),
+):
+    """Create a new conversation."""
+    title = (body or {}).get("title", "New conversation")
+    try:
+        from chat import create_conversation as _create
+        conv = _create(user["id"], title)
+        return conv
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Chat error: {str(e)}")
+
+
+@app.get("/conversations/{conversation_id}/messages")
+def get_messages(conversation_id: str, user=Depends(_require_user)):
+    """List messages in a conversation."""
+    try:
+        from chat import list_messages as _list
+        return {"messages": _list(conversation_id, user["id"])}
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Chat error: {str(e)}")
 
 
 def _resolve_credentials_path():
@@ -91,13 +208,55 @@ def get_schema():
         return json.load(f)
 
 
+def _save_ask_messages(
+    user_id: str,
+    conversation_id: str | None,
+    query: str,
+    response: dict,
+) -> str | None:
+    """Save user message and assistant response. Create conversation if needed. Returns conversation_id."""
+    try:
+        from chat import create_conversation, create_message, get_conversation
+        conv_id = conversation_id
+        if not conv_id:
+            conv = create_conversation(user_id, title=query[:80] + ("..." if len(query) > 80 else ""))
+            conv_id = conv["id"]
+        else:
+            conv = get_conversation(conv_id, user_id)
+            if not conv:
+                return None
+        create_message(conv_id, user_id, "user", query)
+        explanation = response.get("explanation", "")
+        create_message(
+            conv_id,
+            user_id,
+            "assistant",
+            explanation,
+            metadata={
+                "plan": response.get("plan"),
+                "data_feasibility": response.get("data_feasibility"),
+                "results": response.get("results"),
+                "chart_spec": response.get("chart_spec"),
+                "sql": response.get("sql"),
+            },
+        )
+        return conv_id
+    except Exception:
+        return conversation_id
+
+
 @app.post("/ask")
-def ask(body: dict = Body(default={"query": ""})):
+def ask(
+    body: dict = Body(default={"query": ""}),
+    user=Depends(get_current_user_optional),
+):
     """
     Submit a natural language question. Runs the multi-agent pipeline and returns
     plan, data_feasibility, results, chart_spec, explanation, and trace.
+    Optionally pass conversation_id and Authorization to persist chat.
     """
     query = (body or {}).get("query", "").strip()
+    conversation_id = (body or {}).get("conversation_id")
     if not query:
         raise HTTPException(status_code=400, detail="query is required")
 
@@ -107,7 +266,7 @@ def ask(body: dict = Body(default={"query": ""})):
         initial_state = {"query": query, "trace": []}
         final_state = graph.invoke(initial_state)
 
-        return {
+        response = {
             "plan": final_state.get("plan"),
             "data_feasibility": final_state.get("data_feasibility"),
             "nearest_plan": final_state.get("nearest_plan"),
@@ -118,7 +277,16 @@ def ask(body: dict = Body(default={"query": ""})):
             "chart_spec": final_state.get("chart_spec"),
             "explanation": final_state.get("explanation"),
             "trace": final_state.get("trace", []),
+            "data_range": final_state.get("data_range"),
+            "empty_result_reason": final_state.get("empty_result_reason"),
         }
+
+        if user:
+            saved_conv_id = _save_ask_messages(user["id"], conversation_id, query, response)
+            if saved_conv_id:
+                response["conversation_id"] = saved_conv_id
+
+        return response
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -133,7 +301,7 @@ def ask(body: dict = Body(default={"query": ""})):
         raise HTTPException(status_code=503, detail=err_msg)
 
 
-async def _ask_stream_generator(query: str):
+async def _ask_stream_generator(query: str, user: dict | None, conversation_id: str | None):
     """Async generator that yields SSE events for real-time agent progress."""
     try:
         from agents.graph import get_graph
@@ -168,7 +336,13 @@ async def _ask_stream_generator(query: str):
                 "chart_spec": last_state.get("chart_spec"),
                 "explanation": last_state.get("explanation"),
                 "trace": last_state.get("trace", []),
+                "data_range": last_state.get("data_range"),
+                "empty_result_reason": last_state.get("empty_result_reason"),
             }
+            if user:
+                saved_conv_id = _save_ask_messages(user["id"], conversation_id, query, response)
+                if saved_conv_id:
+                    response["conversation_id"] = saved_conv_id
             yield f"data: {json.dumps({'type': 'complete', 'response': response})}\n\n"
     except Exception as e:
         err_msg = str(e)
@@ -183,18 +357,23 @@ async def _ask_stream_generator(query: str):
 
 
 @app.post("/ask/stream")
-async def ask_stream(body: dict = Body(default={"query": ""})):
+async def ask_stream(
+    body: dict = Body(default={"query": ""}),
+    user=Depends(get_current_user_optional),
+):
     """
     Submit a natural language question. Streams real-time agent progress via SSE,
     then returns the full response in the final event.
+    Optionally pass conversation_id and Authorization to persist chat.
     """
     query = (body or {}).get("query", "").strip()
+    conversation_id = (body or {}).get("conversation_id")
     if not query:
         raise HTTPException(status_code=400, detail="query is required")
 
     try:
         return StreamingResponse(
-            _ask_stream_generator(query),
+            _ask_stream_generator(query, user, conversation_id),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",

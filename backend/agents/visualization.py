@@ -35,6 +35,25 @@ Your job:
 4. Set title to a short, descriptive chart title.
 """
 
+VIZ_PROMPT_EMPTY = """You are a data visualization agent. The query returned NO data (0 rows). Your job is to produce a helpful explanation for the user.
+
+User question: {query}
+
+Analysis plan:
+- Metrics: {metrics}
+- Dimensions: {dimensions}
+- Filters: {filters}
+
+Data available: {data_range_info}
+
+Your job:
+1. Set chart_type to "table", x_field and y_field to null, title to something like "No data" or "No results".
+2. Write a concise, user-friendly explanation (2-3 sentences) that:
+   - Explains that no data was found for the requested period (e.g., last month).
+   - If data_range_info is provided, mention: "Available data spans from {min_date} to {max_date}. Try asking for a time range within this period."
+   - Be helpful and suggest what the user could try instead.
+"""
+
 
 def run_visualization(state: dict) -> dict:
     """Visualization Agent: produce chart_spec and explanation."""
@@ -42,13 +61,43 @@ def run_visualization(state: dict) -> dict:
     plan = state.get("plan", {})
     raw_results = state.get("raw_results")
     trace = state.get("trace", [])
+    data_range = state.get("data_range")
+    empty_result_reason = state.get("empty_result_reason")
 
     if not raw_results:
         trace.append(TraceEntry(agent="visualization", status="info", message="No results to visualize").model_dump())
+        # Use contextual explanation when data_range or empty_result_reason is available
+        if data_range or empty_result_reason:
+            data_range_info = (
+                f"Data spans from {data_range['min']} to {data_range['max']}"
+                if data_range and data_range.get("min") and data_range.get("max")
+                else (empty_result_reason or "Unknown")
+            )
+            try:
+                llm = get_gemini()
+                structured_llm = llm.with_structured_output(VisualizationOutput, method="json_mode")
+                prompt = VIZ_PROMPT_EMPTY.format(
+                    query=query,
+                    metrics=plan.get("metrics", []),
+                    dimensions=plan.get("dimensions", []),
+                    filters=plan.get("filters", {}),
+                    data_range_info=data_range_info,
+                    min_date=data_range.get("min", "?") if data_range else "?",
+                    max_date=data_range.get("max", "?") if data_range else "?",
+                )
+                result = structured_llm.invoke(prompt)
+                result_dict = result.model_dump() if hasattr(result, "model_dump") else result
+                explanation = result_dict.get("explanation", empty_result_reason or "No data was returned for this query.")
+            except Exception:
+                explanation = empty_result_reason or "No data was returned for this query."
+        else:
+            explanation = "No data was returned for this query."
         return {
             "chart_spec": {"chart_type": "table", "title": "No data", "x_field": None, "y_field": None},
-            "explanation": "No data was returned for this query.",
+            "explanation": explanation,
             "trace": trace,
+            "data_range": data_range,
+            "empty_result_reason": empty_result_reason,
         }
 
     metrics = plan.get("metrics", [])

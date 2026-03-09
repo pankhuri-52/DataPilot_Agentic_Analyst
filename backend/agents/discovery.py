@@ -15,6 +15,22 @@ def _load_schema() -> dict:
         return json.load(f)
 
 
+def _extract_data_ranges(schema: dict) -> str:
+    """Extract data_range metadata from schema for date columns. Returns formatted string for prompt."""
+    ranges = []
+    for table in schema.get("tables", []):
+        tname = table.get("name", "")
+        for col in table.get("columns", []):
+            dr = col.get("data_range")
+            if dr and isinstance(dr, dict):
+                min_val = dr.get("min", "?")
+                max_val = dr.get("max", "?")
+                ranges.append(f"- {tname}.{col.get('name', '')}: available from {min_val} to {max_val}")
+    if not ranges:
+        return "No static data_range metadata available for date columns."
+    return "Data availability (static metadata for date columns):\n" + "\n".join(ranges)
+
+
 DISCOVERY_PROMPT = """You are a data discovery agent. You have an analysis plan and a database schema.
 
 Analysis plan:
@@ -25,16 +41,19 @@ Analysis plan:
 Database schema (tables and columns):
 {schema_json}
 
+{data_ranges_section}
+
 Your job:
 1. Check if the requested metrics and dimensions can be satisfied with the available tables and columns.
-2. Return feasibility:
-   - "full": All requested metrics and dimensions exist. We can answer the question exactly.
-   - "partial": Some metrics/dimensions exist. We can answer a nearest possible version. Explain what's missing.
+2. If the plan has date filters (e.g. start_date, end_date, period like "last_month", "last_quarter"), check whether the requested time range falls within the available data_range above. If the requested period is outside the known range, set feasibility to "partial" or "none" and explain in missing_explanation. Use the actual min and max dates from the data availability section above (e.g. "The requested period (e.g. last month) has no data. Available data spans from 2024-01-01 to 2024-02-15. Try asking for a time range within this period.").
+3. Return feasibility:
+   - "full": All requested metrics and dimensions exist, and date filters (if any) fall within available data. We can answer the question exactly.
+   - "partial": Some metrics/dimensions exist, or date range may be outside available data. We can answer a nearest possible version. Explain what's missing.
    - "none": The data does not support this analysis. Explain what's missing.
 
-3. If "partial", provide nearest_plan: an adjusted plan with only the metrics/dimensions we CAN provide.
-4. If "partial" or "none", provide missing_explanation: what columns or tables are missing and why we can't fulfill the request.
-5. List tables_used: which tables will be used for the (possibly adjusted) plan.
+4. If "partial", provide nearest_plan: an adjusted plan with only the metrics/dimensions we CAN provide.
+5. If "partial" or "none", provide missing_explanation: what columns or tables are missing, or if the date range is outside available data.
+6. List tables_used: which tables will be used for the (possibly adjusted) plan.
 
 Column mapping hints:
 - revenue, total_amount, line_total -> orders.total_amount, order_items.line_total, sales_daily.revenue
@@ -57,6 +76,8 @@ def run_discovery(state: dict) -> dict:
 
     schema = _load_schema()
     schema_json = json.dumps(schema, indent=2)
+    data_ranges = _extract_data_ranges(schema)
+    data_ranges_section = data_ranges
 
     metrics = plan.get("metrics", [])
     dimensions = plan.get("dimensions", [])
@@ -70,6 +91,7 @@ def run_discovery(state: dict) -> dict:
             dimensions=dimensions,
             filters=json.dumps(filters),
             schema_json=schema_json,
+            data_ranges_section=data_ranges_section,
         )
         result = structured_llm.invoke(prompt)
 

@@ -1,11 +1,9 @@
 """
-Query Execution Agent – generates SQL and executes on BigQuery.
+Query Execution Agent – generates SQL and executes via generic DB connector.
 """
 import os
 import json
 import re
-from decimal import Decimal
-from datetime import date, datetime
 from pathlib import Path
 from llm import get_gemini
 from agents.state import TraceEntry
@@ -19,18 +17,6 @@ def _load_schema() -> dict:
         return json.load(f)
 
 
-def _resolve_credentials_path():
-    """Resolve GOOGLE_APPLICATION_CREDENTIALS to absolute path."""
-    path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
-    if not path:
-        return
-    p = Path(path)
-    if not p.is_absolute():
-        project_root = Path(__file__).resolve().parent.parent.parent
-        p = project_root / path
-    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(p.resolve())
-
-
 # Block DDL, DML, and dangerous operations
 FORBIDDEN_SQL_PATTERNS = re.compile(
     r"\b(CREATE|DROP|ALTER|INSERT|UPDATE|DELETE|TRUNCATE|GRANT|REVOKE|EXEC|EXECUTE)\b",
@@ -38,7 +24,7 @@ FORBIDDEN_SQL_PATTERNS = re.compile(
 )
 
 
-EXECUTOR_PROMPT = """Generate a BigQuery SQL query for the following analysis plan.
+EXECUTOR_PROMPT_BIGQUERY = """Generate a BigQuery SQL query for the following analysis plan.
 
 Analysis plan:
 - Metrics: {metrics}
@@ -53,6 +39,25 @@ Rules:
 2. Only SELECT statements. No CREATE, INSERT, UPDATE, DELETE.
 3. Use proper JOINs based on schema relationships.
 4. For date filters, use EXTRACT or DATE functions. If period is "last_quarter", use DATE_SUB and DATE_TRUNC.
+5. Limit results to 1000 rows (add LIMIT 1000).
+6. Return ONLY the SQL query, no explanation. No markdown code blocks.
+"""
+
+EXECUTOR_PROMPT_POSTGRES = """Generate a PostgreSQL SQL query for the following analysis plan.
+
+Analysis plan:
+- Metrics: {metrics}
+- Dimensions: {dimensions}
+- Filters: {filters}
+
+Schema (schema: {schema}):
+{schema_json}
+
+Rules:
+1. Use standard PostgreSQL SQL. Table names: "{schema}".table_name or schema.table_name
+2. Only SELECT statements. No CREATE, INSERT, UPDATE, DELETE.
+3. Use proper JOINs based on schema relationships.
+4. For date filters, use DATE_TRUNC, INTERVAL, or CURRENT_DATE. If period is "last_quarter", use DATE_TRUNC('quarter', CURRENT_DATE) - INTERVAL '1 quarter'.
 5. Limit results to 1000 rows (add LIMIT 1000).
 6. Return ONLY the SQL query, no explanation. No markdown code blocks.
 """
@@ -75,13 +80,18 @@ def run_executor(state: dict) -> dict:
         trace.append(TraceEntry(agent="executor", status="error", message="No plan available").model_dump())
         return {"trace": trace}
 
-    project_id = os.getenv("BIGQUERY_PROJECT_ID")
-    dataset_id = os.getenv("BIGQUERY_DATASET", "retail_data")
-    if not project_id or project_id == "your-gcp-project-id":
-        trace.append(TraceEntry(agent="executor", status="error", message="BigQuery not configured").model_dump())
+    try:
+        from db.factory import get_connector
+        connector = get_connector()
+    except ImportError:
+        connector = None
+
+    if not connector:
+        trace.append(TraceEntry(agent="executor", status="error", message="No database configured. Set BIGQUERY_PROJECT_ID or DATABASE_TYPE=postgres with POSTGRES_URL.").model_dump())
         return {"trace": trace}
 
-    _resolve_credentials_path()
+    project_id = os.getenv("BIGQUERY_PROJECT_ID")
+    dataset_id = os.getenv("BIGQUERY_DATASET", "retail_data")
     schema = _load_schema()
     schema_json = json.dumps(schema, indent=2)
 
@@ -91,14 +101,25 @@ def run_executor(state: dict) -> dict:
 
     try:
         llm = get_gemini()
-        prompt = EXECUTOR_PROMPT.format(
-            metrics=metrics,
-            dimensions=dimensions,
-            filters=json.dumps(filters),
-            schema_json=schema_json,
-            project=project_id,
-            dataset=dataset_id,
-        )
+        dialect = connector.dialect
+        if dialect == "postgres":
+            schema_name = os.getenv("POSTGRES_SCHEMA", "public")
+            prompt = EXECUTOR_PROMPT_POSTGRES.format(
+                metrics=metrics,
+                dimensions=dimensions,
+                filters=json.dumps(filters),
+                schema_json=schema_json,
+                schema=schema_name,
+            )
+        else:
+            prompt = EXECUTOR_PROMPT_BIGQUERY.format(
+                metrics=metrics,
+                dimensions=dimensions,
+                filters=json.dumps(filters),
+                schema_json=schema_json,
+                project=project_id,
+                dataset=dataset_id,
+            )
         response = llm.invoke(prompt)
         sql = (response.content if hasattr(response, "content") else str(response)).strip()
         # Remove markdown code blocks if present
@@ -111,19 +132,7 @@ def run_executor(state: dict) -> dict:
             trace.append(TraceEntry(agent="executor", status="error", message="Generated SQL contains forbidden operations").model_dump())
             return {"trace": trace}
 
-        from google.cloud import bigquery
-        client = bigquery.Client(project=project_id)
-        query_job = client.query(sql)
-        rows = list(query_job.result(max_results=1000))
-
-        def _serialize(v):
-            if isinstance(v, Decimal):
-                return float(v)
-            if isinstance(v, (date, datetime)):
-                return v.isoformat()
-            return v
-
-        raw_results = [{k: _serialize(v) for k, v in dict(row).items()} for row in rows]
+        raw_results = connector.execute(sql)
 
         trace.append(
             TraceEntry(
@@ -134,7 +143,22 @@ def run_executor(state: dict) -> dict:
             ).model_dump()
         )
 
-        return {"sql": sql, "raw_results": raw_results, "trace": trace}
+        update = {"sql": sql, "raw_results": raw_results, "trace": trace}
+
+        # Dynamic diagnostics: when 0 rows and plan has date filters, run diagnostic query
+        if len(raw_results) == 0 and effective_plan.get("filters"):
+            filters = effective_plan.get("filters", {})
+            has_date_filter = any(
+                k in filters for k in ("start_date", "end_date", "period", "date_range")
+            )
+            if has_date_filter:
+                data_range, empty_result_reason = connector.run_date_range_diagnostic(schema)
+                if data_range:
+                    update["data_range"] = data_range
+                if empty_result_reason:
+                    update["empty_result_reason"] = empty_result_reason
+
+        return update
     except Exception as e:
         trace.append(TraceEntry(agent="executor", status="error", message=str(e)).model_dump())
         return {"trace": trace}

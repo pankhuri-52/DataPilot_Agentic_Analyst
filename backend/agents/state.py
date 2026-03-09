@@ -51,3 +51,5 @@ class DataPilotState(TypedDict, total=False):
     chart_spec: Optional[dict[str, Any]]
     explanation: str
     trace: list[dict[str, Any]]
+    data_range: Optional[dict[str, Any]]  # {"min": "YYYY-MM-DD", "max": "YYYY-MM-DD", "table": "...", "column": "..."}
+    empty_result_reason: Optional[str]  # Contextual explanation when query returns 0 rows

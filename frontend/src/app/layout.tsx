@@ -3,6 +3,7 @@ import "./globals.css";
 import { Fraunces, DM_Sans } from "next/font/google";
 import { cn } from "@/lib/utils";
 import { AppShell } from "@/components/AppShell";
+import { AuthProvider } from "@/contexts/AuthContext";
 
 const fraunces = Fraunces({
   subsets: ["latin"],
@@ -29,7 +30,9 @@ export default function RootLayout({
   return (
     <html lang="en" className={cn("font-sans", dmSans.variable, fraunces.variable)}>
       <body className="antialiased min-h-screen bg-background">
-        <AppShell>{children}</AppShell>
+        <AuthProvider>
+          <AppShell>{children}</AppShell>
+        </AuthProvider>
       </body>
     </html>
   );

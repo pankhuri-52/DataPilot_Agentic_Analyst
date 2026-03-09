@@ -1,16 +1,24 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { AlertCircle, Send, Loader2 } from "lucide-react";
+import { AlertCircle, Send, Loader2, MessageSquarePlus } from "lucide-react";
 import { StepLoader } from "./StepLoader";
 import { PlanCard } from "./PlanCard";
 import { ArtifactCard } from "./ArtifactCard";
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/contexts/AuthContext";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
+interface Conversation {
+  id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+}
 
 interface TraceEntry {
   agent: string;
@@ -35,6 +43,7 @@ interface AskResponse {
   };
   explanation?: string;
   trace?: TraceEntry[];
+  conversation_id?: string;
 }
 
 interface Message {
@@ -64,8 +73,11 @@ function extractPlanFromTrace(trace: TraceEntry[]): Record<string, unknown> | un
 }
 
 export function DataPilotClient() {
+  const { user, getAccessToken } = useAuth();
   const [query, setQuery] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -77,6 +89,71 @@ export function DataPilotClient() {
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
+
+  const fetchConversations = useCallback(async () => {
+    const token = getAccessToken();
+    if (!token) return;
+    try {
+      const res = await fetch(`${API_BASE}/conversations`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setConversations(data.conversations || []);
+      }
+    } catch {
+      // Ignore
+    }
+  }, [getAccessToken]);
+
+  useEffect(() => {
+    if (user) {
+      fetchConversations();
+    } else {
+      setConversations([]);
+      setCurrentConversationId(null);
+    }
+  }, [user, fetchConversations]);
+
+  const loadConversation = useCallback(
+    async (convId: string) => {
+      const token = getAccessToken();
+      if (!token) return;
+      try {
+        const res = await fetch(`${API_BASE}/conversations/${convId}/messages`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          const msgs = (data.messages || []) as { role: string; content: string; metadata?: Record<string, unknown> }[];
+          setMessages(
+            msgs.map((m) => {
+              const meta = m.metadata || {};
+              const response: AskResponse | undefined =
+                m.role === "assistant"
+                  ? { ...meta, explanation: m.content } as AskResponse
+                  : undefined;
+              return {
+                id: crypto.randomUUID(),
+                role: m.role as "user" | "assistant",
+                content: m.content,
+                response,
+              };
+            })
+          );
+          setCurrentConversationId(convId);
+        }
+      } catch {
+        // Ignore
+      }
+    },
+    [getAccessToken]
+  );
+
+  const startNewChat = () => {
+    setCurrentConversationId(null);
+    setMessages([]);
+  };
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -101,11 +178,18 @@ export function DataPilotClient() {
     };
     setMessages((prev) => [...prev, assistantMessage]);
 
+    const token = getAccessToken();
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+
     try {
       const res = await fetch(`${API_BASE}/ask/stream`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query: query.trim() }),
+        headers,
+        body: JSON.stringify({
+          query: query.trim(),
+          conversation_id: currentConversationId || undefined,
+        }),
       });
 
       if (!res.ok) {
@@ -149,6 +233,11 @@ export function DataPilotClient() {
                 })
               );
             } else if (event.type === "complete") {
+              const convId = event.response?.conversation_id;
+              if (convId) {
+                setCurrentConversationId(convId);
+                fetchConversations();
+              }
               setMessages((prev) =>
                 prev.map((m) =>
                   m.id === assistantMessageId
@@ -187,6 +276,11 @@ export function DataPilotClient() {
           try {
             const event = JSON.parse(dataMatch[1].trim());
             if (event.type === "complete") {
+              const convId = event.response?.conversation_id;
+              if (convId) {
+                setCurrentConversationId(convId);
+                fetchConversations();
+              }
               setMessages((prev) =>
                 prev.map((m) =>
                   m.id === assistantMessageId
@@ -237,7 +331,38 @@ export function DataPilotClient() {
   }
 
   return (
-    <div className="flex flex-col">
+    <div className="flex flex-1 gap-4">
+      {user && (
+        <aside className="hidden w-56 shrink-0 flex-col gap-2 md:flex">
+          <Button
+            variant="outline"
+            size="sm"
+            className="w-full justify-start cursor-pointer"
+            onClick={startNewChat}
+          >
+            <MessageSquarePlus className="size-4 mr-2" />
+            New chat
+          </Button>
+          <div className="flex flex-col gap-1 overflow-y-auto max-h-[calc(100vh-12rem)]">
+            {conversations.map((conv) => (
+              <button
+                key={conv.id}
+                type="button"
+                onClick={() => loadConversation(conv.id)}
+                className={cn(
+                  "truncate rounded-lg px-3 py-2 text-left text-sm transition-colors cursor-pointer",
+                  currentConversationId === conv.id
+                    ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                    : "text-muted-foreground hover:bg-muted"
+                )}
+              >
+                {conv.title || "Untitled"}
+              </button>
+            ))}
+          </div>
+        </aside>
+      )}
+      <div className="flex flex-1 flex-col min-w-0">
       <div className="space-y-6 pb-24">
         {messages.length === 0 && (
           <div className="flex flex-col items-center justify-center py-16 text-center">
@@ -392,6 +517,7 @@ export function DataPilotClient() {
             </Button>
           </form>
         </div>
+      </div>
       </div>
     </div>
   );
