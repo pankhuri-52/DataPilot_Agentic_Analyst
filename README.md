@@ -36,12 +36,13 @@ We’ll follow this order and update the progress section below as we go.
 | 9 | **Agent trace UI** – Show step-by-step reasoning and decisions | ✅ Done |
 | 10 | **Polish** – Basic charts, cost estimate display, guardrails messaging | ⬜ Pending |
 | 11 | **Real-time agent logs** – SSE streaming of agent progress (planner → discovery → executor → validator → visualization) | ✅ Done |
+| 12 | **Signin/Signup page** – Auth flow; only authenticated users can access the app | 🔄 In progress |
 
 ---
 
 ## What to do next
 
-**Next step: 10.** Steps 7–9 done: Frontend with shadcn/ui, connected to `POST /ask`, agent trace UI. Next: step 10 (charts, cost estimate, guardrails).
+**Next step: 12 (in progress).** Signin/Signup page and auth – only authenticated users can access the app. Also pending: step 10 (charts, cost estimate, guardrails).
 
 ---
 
