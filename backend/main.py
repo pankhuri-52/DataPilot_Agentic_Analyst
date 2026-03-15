@@ -232,6 +232,21 @@ def get_schema():
         return json.load(f)
 
 
+def _get_conversation_history(user_id: str, conversation_id: str | None) -> list[dict]:
+    """Fetch recent messages from a conversation for conversational context. Returns list of {role, content, metadata}."""
+    if not conversation_id or not user_id:
+        return []
+    try:
+        from chat import list_messages
+        msgs = list_messages(conversation_id, user_id)
+        return [
+            {"role": m.get("role", ""), "content": m.get("content", ""), "metadata": m.get("metadata") or {}}
+            for m in msgs
+        ]
+    except Exception:
+        return []
+
+
 def _save_ask_messages(
     user_id: str,
     conversation_id: str | None,
@@ -250,20 +265,22 @@ def _save_ask_messages(
             if not conv:
                 return None
         create_message(conv_id, user_id, "user", query)
+        plan = response.get("plan") or {}
+        clarifying = plan.get("clarifying_questions") or []
         explanation = response.get("explanation", "")
-        create_message(
-            conv_id,
-            user_id,
-            "assistant",
-            explanation,
-            metadata={
-                "plan": response.get("plan"),
-                "data_feasibility": response.get("data_feasibility"),
-                "results": response.get("results"),
-                "chart_spec": response.get("chart_spec"),
-                "sql": response.get("sql"),
-            },
-        )
+        # When assistant asked clarifying questions (e.g. data range), use first as content for display
+        if not explanation and clarifying:
+            explanation = clarifying[0] if isinstance(clarifying[0], str) else "; ".join(clarifying)
+        metadata = {
+            "plan": plan,
+            "data_feasibility": response.get("data_feasibility"),
+            "results": response.get("results"),
+            "chart_spec": response.get("chart_spec"),
+            "sql": response.get("sql"),
+        }
+        if clarifying:
+            metadata["clarifying_questions"] = clarifying
+        create_message(conv_id, user_id, "assistant", explanation or "No response.", metadata=metadata)
         return conv_id
     except Exception:
         return conversation_id
@@ -284,10 +301,12 @@ def ask(
     if not query:
         raise HTTPException(status_code=400, detail="query is required")
 
+    history = _get_conversation_history(user["id"] if user else "", conversation_id) if user else []
+
     try:
         from agents.graph import get_graph
         graph = get_graph()
-        initial_state = {"query": query, "trace": []}
+        initial_state = {"query": query, "trace": [], "conversation_history": history}
         final_state = graph.invoke(initial_state)
 
         response = {
@@ -325,13 +344,14 @@ def ask(
         raise HTTPException(status_code=503, detail=err_msg)
 
 
-async def _ask_stream_generator(query: str, user: dict | None, conversation_id: str | None):
+async def _ask_stream_generator(query: str, user: dict | None, conversation_id: str | None, conversation_history: list[dict] | None = None):
     """Async generator that yields SSE events for real-time agent progress."""
     try:
         from agents.graph import get_graph
 
         graph = get_graph()
-        initial_state = {"query": query, "trace": []}
+        history = conversation_history or []
+        initial_state = {"query": query, "trace": [], "conversation_history": history}
         prev_trace_len = 0
         last_state = None
 
@@ -389,15 +409,18 @@ async def ask_stream(
     Submit a natural language question. Streams real-time agent progress via SSE,
     then returns the full response in the final event.
     Optionally pass conversation_id and Authorization to persist chat.
+    Uses conversation history for conversational context (e.g. user says "Sure" to proceed with available range).
     """
     query = (body or {}).get("query", "").strip()
     conversation_id = (body or {}).get("conversation_id")
     if not query:
         raise HTTPException(status_code=400, detail="query is required")
 
+    history = _get_conversation_history(user["id"] if user else "", conversation_id) if user else []
+
     try:
         return StreamingResponse(
-            _ask_stream_generator(query, user, conversation_id),
+            _ask_stream_generator(query, user, conversation_id, conversation_history=history),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",

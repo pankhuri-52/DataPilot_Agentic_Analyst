@@ -4,17 +4,9 @@ Query Execution Agent – generates SQL and executes via generic DB connector.
 import os
 import json
 import re
-from pathlib import Path
 from llm import get_gemini
 from agents.state import TraceEntry
-
-
-def _load_schema() -> dict:
-    """Load static schema metadata."""
-    backend_dir = Path(__file__).resolve().parent.parent
-    schema_path = backend_dir / "schema" / "metadata.json"
-    with open(schema_path, encoding="utf-8") as f:
-        return json.load(f)
+from agents.schema_utils import load_schema
 
 
 # Block DDL, DML, and dangerous operations
@@ -70,6 +62,10 @@ def run_executor(state: dict) -> dict:
     data_feasibility = state.get("data_feasibility", "none")
     trace = state.get("trace", [])
 
+    trace.append(
+        TraceEntry(agent="executor", status="info", message="Preparing to generate and execute SQL...").model_dump()
+    )
+
     if data_feasibility == "none":
         trace.append(TraceEntry(agent="executor", status="info", message="Skipped – no feasible data").model_dump())
         return {"trace": trace}
@@ -79,6 +75,10 @@ def run_executor(state: dict) -> dict:
     if not effective_plan:
         trace.append(TraceEntry(agent="executor", status="error", message="No plan available").model_dump())
         return {"trace": trace}
+
+    trace.append(
+        TraceEntry(agent="executor", status="info", message="Connecting to database...").model_dump()
+    )
 
     try:
         from db.factory import get_connector
@@ -90,9 +90,13 @@ def run_executor(state: dict) -> dict:
         trace.append(TraceEntry(agent="executor", status="error", message="No database configured. Set BIGQUERY_PROJECT_ID or DATABASE_TYPE=postgres with POSTGRES_URL.").model_dump())
         return {"trace": trace}
 
+    trace.append(
+        TraceEntry(agent="executor", status="info", message="Generating SQL from analysis plan...").model_dump()
+    )
+
     project_id = os.getenv("BIGQUERY_PROJECT_ID")
     dataset_id = os.getenv("BIGQUERY_DATASET", "retail_data")
-    schema = _load_schema()
+    schema = load_schema()
     schema_json = json.dumps(schema, indent=2)
 
     metrics = effective_plan.get("metrics", [])
@@ -131,6 +135,10 @@ def run_executor(state: dict) -> dict:
         if FORBIDDEN_SQL_PATTERNS.search(sql):
             trace.append(TraceEntry(agent="executor", status="error", message="Generated SQL contains forbidden operations").model_dump())
             return {"trace": trace}
+
+        trace.append(
+            TraceEntry(agent="executor", status="info", message="Executing query on database...").model_dump()
+        )
 
         raw_results = connector.execute(sql)
 

@@ -45,12 +45,13 @@ We’ll follow this order and update the progress section below as we go.
 | 10 | **Polish** – Basic charts, cost estimate display, guardrails messaging | ⬜ Pending |
 | 11 | **Real-time agent logs** – SSE streaming of agent progress (planner → discovery → executor → validator → visualization) | ✅ Done |
 | 12 | **Signin/Signup** – Auth flow via Supabase (login, signup, JWT validation); chat persistence for authenticated users | ✅ Done |
+| 13 | **Conversational chain** – When LLM asks a clarifying question (e.g. data range) and user says "Sure"/"Yes"/"Okay", system uses chat history to understand context and proceed with amended plan | ✅ Done |
 
 ---
 
 ## What to do next
 
-**Next step: 10.** Polish – charts, cost estimate, guardrails messaging. Signin/Signup and chat persistence are done.
+**Next step: 10.** Polish – charts, cost estimate, guardrails messaging. Signin/Signup, chat persistence, and conversational chain are done.
 
 ---
 
@@ -69,6 +70,40 @@ We’ll follow this order and update the progress section below as we go.
 - **Steps 7–9 done** – Frontend with shadcn/ui (Input, Button, Card, Accordion, Table, Alert, Badge, Skeleton). Connected to `POST /ask`; displays results, explanation, agent trace, and feasibility badges.
 - **Step 11 done** – Real-time agent progress: stream intermediate agent states (planner → discovery → executor → validator → visualization) to the UI via `POST /ask/stream`. Uses Server-Sent Events (SSE) over HTTP; users see live logs as each agent runs.
 - **Step 12 done** – Signin/Signup: Supabase Auth integration. Backend endpoints `POST /auth/signup`, `POST /auth/login`, `GET /auth/me`. Frontend login (`/login`), signup (`/signup`), forgot-password, reset-password pages. AuthContext for session management. Chat history persisted in Supabase for authenticated users.
+- **Step 13 done** – Conversational chain: When the planner asks a clarifying question (e.g. "Data for last month isn't available. We have data from 2024-01-01 to 2024-02-15. Would you like to get total sales by region for this period instead?") and the user replies "Sure", "Yes", or "Okay", the planner uses conversation history to understand context and produces a valid plan with the available date range. History is fetched from Supabase when `conversation_id` is provided.
+
+---
+
+## Chat history persistence (Supabase)
+
+Chat history is persisted in Supabase for authenticated users. The schema supports full conversational context.
+
+### Schema
+
+- **`conversations`** – One row per chat. Columns: `id`, `user_id` (references `auth.users`), `title`, `created_at`, `updated_at`.
+- **`messages`** – One row per message. Columns: `id`, `conversation_id`, `role` (`user` | `assistant`), `content`, `metadata` (JSONB), `created_at`.
+
+### Message metadata (assistant messages)
+
+The `metadata` JSONB column stores agent response details for conversational context:
+
+| Key | Description |
+|-----|-------------|
+| `plan` | Analysis plan (metrics, dimensions, filters, `clarifying_questions`) |
+| `clarifying_questions` | When assistant asked a follow-up (e.g. data range offer) |
+| `data_feasibility` | full \| partial \| none |
+| `results` | Query results (if any) |
+| `chart_spec` | Chart configuration |
+| `sql` | Generated SQL |
+
+When the user replies (e.g. "Sure") to a clarifying question, the backend fetches recent messages, passes them as `conversation_history` to the planner, and the planner resolves the effective query from context.
+
+### Migrations
+
+1. Run `001_conversations.sql` – creates tables, indexes, RLS policies.
+2. Run `002_chat_schema_docs.sql` – adds schema comments (optional).
+
+See `backend/supabase_migrations/README.md` for setup.
 
 ---
 
@@ -177,4 +212,4 @@ Example questions you can answer later with the agent: *“What were total sales
 
 ---
 
-*Last updated: step 12 done – Signin/Signup and chat persistence via Supabase; next: step 10 (polish).*
+*Last updated: step 13 done – Conversational chain with chat history; next: step 10 (polish).*

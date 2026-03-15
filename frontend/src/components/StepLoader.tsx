@@ -65,6 +65,9 @@ export function StepLoader({ liveTrace, isLoading }: StepLoaderProps) {
         const label = AGENT_LABELS[agent] ?? agent;
         const isExpanded = expandedStep === agent;
 
+        const latestEntry = traceEntries[traceEntries.length - 1];
+        const latestMessage = latestEntry?.message;
+
         return (
           <div
             key={`${agent}-${index}`}
@@ -103,7 +106,14 @@ export function StepLoader({ liveTrace, isLoading }: StepLoaderProps) {
               {isPending && (
                 <div className="size-4 shrink-0 rounded-full border-2 border-muted-foreground/30" />
               )}
-              <span className="flex-1 text-sm font-medium">{label}</span>
+              <div className="flex-1 min-w-0 flex flex-col gap-0.5">
+                <span className="text-sm font-medium">{label}</span>
+                {latestMessage && (isActive || isExpanded) && (
+                  <span className="text-xs text-muted-foreground truncate">
+                    {latestMessage}
+                  </span>
+                )}
+              </div>
               {isCompleted && (
                 <Badge variant="secondary" className="text-xs">
                   Done

@@ -2,33 +2,9 @@
 Data Discovery Agent – checks if the analysis plan can be fulfilled with available data.
 """
 import json
-from pathlib import Path
 from llm import get_gemini
-from agents.state import AnalysisPlan, DataFeasibility, TraceEntry
-
-
-def _load_schema() -> dict:
-    """Load static schema metadata."""
-    backend_dir = Path(__file__).resolve().parent.parent
-    schema_path = backend_dir / "schema" / "metadata.json"
-    with open(schema_path, encoding="utf-8") as f:
-        return json.load(f)
-
-
-def _extract_data_ranges(schema: dict) -> str:
-    """Extract data_range metadata from schema for date columns. Returns formatted string for prompt."""
-    ranges = []
-    for table in schema.get("tables", []):
-        tname = table.get("name", "")
-        for col in table.get("columns", []):
-            dr = col.get("data_range")
-            if dr and isinstance(dr, dict):
-                min_val = dr.get("min", "?")
-                max_val = dr.get("max", "?")
-                ranges.append(f"- {tname}.{col.get('name', '')}: available from {min_val} to {max_val}")
-    if not ranges:
-        return "No static data_range metadata available for date columns."
-    return "Data availability (static metadata for date columns):\n" + "\n".join(ranges)
+from agents.state import DataFeasibility, TraceEntry
+from agents.schema_utils import load_schema, extract_data_ranges
 
 
 DISCOVERY_PROMPT = """You are a data discovery agent. You have an analysis plan and a database schema.
@@ -70,18 +46,30 @@ def run_discovery(state: dict) -> dict:
     plan = state.get("plan")
     trace = state.get("trace", [])
 
+    trace.append(
+        TraceEntry(agent="discovery", status="info", message="Loading schema and data availability...").model_dump()
+    )
+
     if not plan or not plan.get("is_valid"):
         trace.append(TraceEntry(agent="discovery", status="info", message="Skipped – invalid plan").model_dump())
         return {"data_feasibility": "none", "trace": trace}
 
-    schema = _load_schema()
+    schema = load_schema()
     schema_json = json.dumps(schema, indent=2)
-    data_ranges = _extract_data_ranges(schema)
+    data_ranges = extract_data_ranges(schema)
     data_ranges_section = data_ranges
+
+    trace.append(
+        TraceEntry(agent="discovery", status="info", message="Checking if metrics and dimensions exist in schema...").model_dump()
+    )
 
     metrics = plan.get("metrics", [])
     dimensions = plan.get("dimensions", [])
     filters = plan.get("filters", {})
+
+    trace.append(
+        TraceEntry(agent="discovery", status="info", message="Validating requested time range against available data...").model_dump()
+    )
 
     try:
         llm = get_gemini()

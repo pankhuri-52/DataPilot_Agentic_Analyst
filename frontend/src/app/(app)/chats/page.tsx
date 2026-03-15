@@ -1,14 +1,25 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { useEffect } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { MessageSquare } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { MessageSquare, LogIn } from "lucide-react";
+import { useAuth } from "@/contexts/AuthContext";
 import { useChat } from "@/contexts/ChatContext";
 import { cn } from "@/lib/utils";
 
 export default function ChatsPage() {
   const router = useRouter();
-  const { conversations, currentConversationId, loadConversation } = useChat();
+  const { user } = useAuth();
+  const { conversations, currentConversationId, loadConversation, fetchConversations } = useChat();
+
+  useEffect(() => {
+    if (user) {
+      fetchConversations();
+    }
+  }, [user, fetchConversations]);
 
   const handleSelectChat = (convId: string) => {
     loadConversation(convId);
@@ -29,22 +40,35 @@ export default function ChatsPage() {
       </header>
       <div className="flex-1 overflow-auto">
         <div className="mx-auto max-w-4xl px-6 py-6 space-y-6">
-          <h2 className="text-sm font-medium text-muted-foreground">
-            {conversations.length} conversation{conversations.length !== 1 ? "s" : ""}
-          </h2>
-
-          {conversations.length === 0 ? (
+          {!user ? (
+            <Card className="border-dashed">
+              <CardContent className="flex flex-col items-center justify-center py-16">
+                <LogIn className="size-12 text-muted-foreground/50 mb-4" aria-hidden />
+                <p className="text-sm font-medium text-foreground">Sign in to view your chat history</p>
+                <p className="mt-1 text-sm text-muted-foreground text-center max-w-sm">
+                  Chat history is saved only when you are signed in. Sign in to see and continue your previous conversations.
+                </p>
+                <Link href="/login">
+                  <Button className="mt-4">Sign in</Button>
+                </Link>
+              </CardContent>
+            </Card>
+          ) : conversations.length === 0 ? (
             <Card className="border-dashed">
               <CardContent className="flex flex-col items-center justify-center py-16">
                 <MessageSquare className="size-12 text-muted-foreground/50 mb-4" aria-hidden />
                 <p className="text-sm font-medium text-foreground">No conversations yet</p>
                 <p className="mt-1 text-sm text-muted-foreground">
-                  Start a new chat to ask questions about your data.
+                  Start a new chat to ask questions about your data. Your conversations will appear here.
                 </p>
               </CardContent>
             </Card>
           ) : (
-            <div className="space-y-4">
+            <>
+              <h2 className="text-sm font-medium text-muted-foreground">
+                {conversations.length} conversation{conversations.length !== 1 ? "s" : ""}
+              </h2>
+              <div className="space-y-4">
               {conversations.map((conv) => (
                 <Card
                   key={conv.id}
@@ -74,7 +98,8 @@ export default function ChatsPage() {
                   </CardHeader>
                 </Card>
               ))}
-            </div>
+              </div>
+            </>
           )}
         </div>
       </div>

@@ -41,6 +41,7 @@ class TraceEntry(BaseModel):
 class DataPilotState(TypedDict, total=False):
     """Shared state flowing through all agents. Values stored as dicts for LangGraph."""
     query: str
+    conversation_history: list[dict[str, Any]]  # [{role, content, metadata?}] for conversational context
     plan: Optional[dict[str, Any]]  # AnalysisPlan as dict
     data_feasibility: str  # "full" | "partial" | "none"
     nearest_plan: Optional[dict[str, Any]]  # AnalysisPlan as dict if partial

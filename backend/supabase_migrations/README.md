@@ -10,7 +10,9 @@
 
 ## 2. Run the migration
 
-In the Supabase SQL Editor, run the contents of `migrations/001_conversations.sql`.
+In the Supabase SQL Editor, run the migrations in order:
+1. `migrations/001_conversations.sql` – creates `conversations` and `messages` tables, indexes, RLS.
+2. `migrations/002_chat_schema_docs.sql` – adds schema comments (optional).
 
 Or use the Supabase CLI:
 

@@ -64,6 +64,10 @@ def run_visualization(state: dict) -> dict:
     data_range = state.get("data_range")
     empty_result_reason = state.get("empty_result_reason")
 
+    trace.append(
+        TraceEntry(agent="visualization", status="info", message="Preparing chart and explanation...").model_dump()
+    )
+
     if not raw_results:
         trace.append(TraceEntry(agent="visualization", status="info", message="No results to visualize").model_dump())
         # Use contextual explanation when data_range or empty_result_reason is available
@@ -99,6 +103,10 @@ def run_visualization(state: dict) -> dict:
             "data_range": data_range,
             "empty_result_reason": empty_result_reason,
         }
+
+    trace.append(
+        TraceEntry(agent="visualization", status="info", message="Choosing chart type and generating explanation...").model_dump()
+    )
 
     metrics = plan.get("metrics", [])
     dimensions = plan.get("dimensions", [])

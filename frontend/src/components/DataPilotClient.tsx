@@ -52,6 +52,12 @@ function extractPlanFromTrace(trace: TraceEntry[]): Record<string, unknown> | un
       is_valid: o.is_valid,
     };
   }
+  if (o.clarifying_questions && Array.isArray(o.clarifying_questions)) {
+    return {
+      is_valid: false,
+      clarifying_questions: o.clarifying_questions,
+    };
+  }
   return undefined;
 }
 
@@ -266,6 +272,11 @@ export function DataPilotClient() {
             <p className="mt-1 text-xs text-muted-foreground/80">
               Try: &quot;What were total sales by region last month?&quot;
             </p>
+            {!user && (
+              <p className="mt-3 text-xs text-amber-600 dark:text-amber-500">
+                Sign in to save your chat history and access it later.
+              </p>
+            )}
           </div>
         )}
 

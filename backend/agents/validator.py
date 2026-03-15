@@ -9,9 +9,17 @@ def run_validator(state: dict) -> dict:
     raw_results = state.get("raw_results")
     trace = state.get("trace", [])
 
+    trace.append(
+        TraceEntry(agent="validator", status="info", message="Validating query results...").model_dump()
+    )
+
     if raw_results is None:
         trace.append(TraceEntry(agent="validator", status="info", message="No results to validate").model_dump())
         return {"validation_ok": False, "trace": trace}
+
+    trace.append(
+        TraceEntry(agent="validator", status="info", message="Checking result schema consistency...").model_dump()
+    )
 
     validation_ok = True
     issues = []
