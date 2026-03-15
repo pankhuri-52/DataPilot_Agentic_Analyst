@@ -21,13 +21,16 @@ def _get_supabase():
 
 
 def sign_up(email: str, password: str) -> dict[str, Any]:
-    """Create a new user. Returns user and session."""
+    """Create a new user. Returns user and session.
+    When email confirmation is enabled in Supabase, session is None until user confirms.
+    """
     client = _get_supabase()
     response = client.auth.sign_up({"email": email, "password": password})
     user = response.user
     session = response.session
     if not user:
         raise ValueError("Sign up failed")
+    requires_confirmation = session is None
     return {
         "user": {
             "id": user.id,
@@ -36,6 +39,7 @@ def sign_up(email: str, password: str) -> dict[str, Any]:
         "access_token": session.access_token if session else None,
         "refresh_token": session.refresh_token if session else None,
         "expires_at": session.expires_at if session else None,
+        "requires_confirmation": requires_confirmation,
     }
 
 
@@ -56,6 +60,15 @@ def sign_in(email: str, password: str) -> dict[str, Any]:
         "refresh_token": session.refresh_token,
         "expires_at": session.expires_at,
     }
+
+
+def reset_password_for_email(email: str, redirect_to: str | None = None) -> None:
+    """Send a password reset email to the user. Supabase sends the email with a link."""
+    client = _get_supabase()
+    options = {}
+    if redirect_to:
+        options["redirect_to"] = redirect_to
+    client.auth.reset_password_for_email(email, options)
 
 
 def get_user_from_token(access_token: str) -> dict[str, Any] | None:

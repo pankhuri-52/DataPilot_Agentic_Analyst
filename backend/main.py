@@ -105,6 +105,29 @@ def auth_login(body: dict = Body(default={"email": "", "password": ""})):
         raise HTTPException(status_code=503, detail=f"Auth error: {str(e)}")
 
 
+@app.post("/auth/forgot-password")
+def auth_forgot_password(body: dict = Body(default={"email": ""})):
+    """Send a password reset email to the user. Always returns success to prevent email enumeration."""
+    email = (body or {}).get("email", "").strip()
+    if not email:
+        raise HTTPException(status_code=400, detail="Email is required")
+    try:
+        from auth import reset_password_for_email
+        redirect_to = os.getenv("FRONTEND_URL", "http://localhost:3000") + "/reset-password"
+        reset_password_for_email(email, redirect_to)
+        return {"message": "If an account exists with this email, you will receive a password reset link."}
+    except ValueError as e:
+        if "must be set" in str(e).lower():
+            raise HTTPException(
+                status_code=503,
+                detail="Supabase not configured. Set SUPABASE_URL and SUPABASE_ANON_KEY in .env",
+            )
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        # Always return success to prevent email enumeration attacks
+        return {"message": "If an account exists with this email, you will receive a password reset link."}
+
+
 @app.get("/auth/me")
 def auth_me(user=Depends(get_current_user_optional)):
     """Return current user if valid JWT. Returns null if not authenticated."""

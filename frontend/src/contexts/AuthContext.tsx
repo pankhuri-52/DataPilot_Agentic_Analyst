@@ -16,11 +16,15 @@ interface User {
   email: string;
 }
 
+interface SignUpResult {
+  requiresConfirmation?: boolean;
+}
+
 interface AuthContextType {
   user: User | null;
   loading: boolean;
   signIn: (email: string, password: string) => Promise<void>;
-  signUp: (email: string, password: string) => Promise<void>;
+  signUp: (email: string, password: string) => Promise<SignUpResult>;
   signOut: () => void;
   getAccessToken: () => string | null;
 }
@@ -94,7 +98,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const signUp = useCallback(
-    async (email: string, password: string) => {
+    async (email: string, password: string): Promise<SignUpResult> => {
       const res = await fetch(`${API_BASE}/auth/signup`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -106,11 +110,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
       const token = data.access_token;
       const userData = data.user;
-      if (token && userData) {
+      const requiresConfirmation = data.requires_confirmation === true;
+      if (token && userData && !requiresConfirmation) {
         localStorage.setItem(TOKEN_KEY, token);
         localStorage.setItem(USER_KEY, JSON.stringify(userData));
         setUser(userData);
       }
+      return { requiresConfirmation: requiresConfirmation || undefined };
     },
     []
   );

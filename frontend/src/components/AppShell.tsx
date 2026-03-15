@@ -65,21 +65,19 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 </div>
               ) : (
                 <div className="flex flex-col gap-2">
-                  <Link href="/login">
-                    <Button variant="outline" size="sm" className="w-full" asChild>
-                      <span className="cursor-pointer">
-                        <LogIn className="size-4 mr-2" />
-                        Sign in
-                      </span>
-                    </Button>
+                  <Link
+                    href="/login"
+                    className="inline-flex h-7 w-full cursor-pointer items-center justify-center gap-1.5 rounded-lg border border-border bg-background px-2.5 text-sm font-medium transition-colors hover:bg-muted hover:text-foreground"
+                  >
+                    <LogIn className="size-3.5" />
+                    Sign in
                   </Link>
-                  <Link href="/signup">
-                    <Button variant="ghost" size="sm" className="w-full" asChild>
-                      <span className="cursor-pointer">
-                        <UserPlus className="size-4 mr-2" />
-                        Sign up
-                      </span>
-                    </Button>
+                  <Link
+                    href="/signup"
+                    className="inline-flex h-7 w-full cursor-pointer items-center justify-center gap-1.5 rounded-lg px-2.5 text-sm font-medium transition-colors hover:bg-muted hover:text-foreground"
+                  >
+                    <UserPlus className="size-3.5" />
+                    Sign up
                   </Link>
                 </div>
               )}
