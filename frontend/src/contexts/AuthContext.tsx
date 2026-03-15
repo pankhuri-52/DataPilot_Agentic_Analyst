@@ -14,6 +14,7 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 interface User {
   id: string;
   email: string;
+  name?: string;
 }
 
 interface SignUpResult {
@@ -24,7 +25,7 @@ interface AuthContextType {
   user: User | null;
   loading: boolean;
   signIn: (email: string, password: string) => Promise<void>;
-  signUp: (email: string, password: string) => Promise<SignUpResult>;
+  signUp: (email: string, password: string, name?: string) => Promise<SignUpResult>;
   signOut: () => void;
   getAccessToken: () => string | null;
 }
@@ -98,11 +99,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const signUp = useCallback(
-    async (email: string, password: string): Promise<SignUpResult> => {
+    async (email: string, password: string, name?: string): Promise<SignUpResult> => {
       const res = await fetch(`${API_BASE}/auth/signup`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email, password, name: name || undefined }),
       });
       const data = await res.json();
       if (!res.ok) {

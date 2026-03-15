@@ -1,5 +1,6 @@
 import { AppShell } from "@/components/AppShell";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
+import { ChatProvider } from "@/contexts/ChatContext";
 
 export default function AppLayout({
   children,
@@ -7,8 +8,10 @@ export default function AppLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <AppShell>
-      <ProtectedRoute>{children}</ProtectedRoute>
-    </AppShell>
+    <ChatProvider>
+      <AppShell>
+        <ProtectedRoute>{children}</ProtectedRoute>
+      </AppShell>
+    </ChatProvider>
   );
 }

@@ -20,22 +20,26 @@ def _get_supabase():
     return _SUPABASE_CLIENT
 
 
-def sign_up(email: str, password: str) -> dict[str, Any]:
+def sign_up(email: str, password: str, name: str | None = None) -> dict[str, Any]:
     """Create a new user. Returns user and session.
     When email confirmation is enabled in Supabase, session is None until user confirms.
     """
     client = _get_supabase()
-    response = client.auth.sign_up({"email": email, "password": password})
+    credentials: dict[str, Any] = {"email": email, "password": password}
+    if name and name.strip():
+        credentials["options"] = {"data": {"full_name": name.strip()}}
+    response = client.auth.sign_up(credentials)
     user = response.user
     session = response.session
     if not user:
         raise ValueError("Sign up failed")
     requires_confirmation = session is None
+    user_data: dict[str, Any] = {"id": user.id, "email": user.email}
+    meta = getattr(user, "user_metadata", None) or getattr(user, "raw_user_meta_data", None) or {}
+    if meta and meta.get("full_name"):
+        user_data["name"] = meta["full_name"]
     return {
-        "user": {
-            "id": user.id,
-            "email": user.email,
-        },
+        "user": user_data,
         "access_token": session.access_token if session else None,
         "refresh_token": session.refresh_token if session else None,
         "expires_at": session.expires_at if session else None,
@@ -51,11 +55,12 @@ def sign_in(email: str, password: str) -> dict[str, Any]:
     session = response.session
     if not user or not session:
         raise ValueError("Invalid email or password")
+    user_data: dict[str, Any] = {"id": user.id, "email": user.email}
+    meta = getattr(user, "user_metadata", None) or getattr(user, "raw_user_meta_data", None) or {}
+    if meta and meta.get("full_name"):
+        user_data["name"] = meta["full_name"]
     return {
-        "user": {
-            "id": user.id,
-            "email": user.email,
-        },
+        "user": user_data,
         "access_token": session.access_token,
         "refresh_token": session.refresh_token,
         "expires_at": session.expires_at,
@@ -81,6 +86,10 @@ def get_user_from_token(access_token: str) -> dict[str, Any] | None:
         user = response.user
         if not user:
             return None
-        return {"id": user.id, "email": user.email}
+        result: dict[str, Any] = {"id": user.id, "email": user.email}
+        meta = getattr(user, "user_metadata", None) or getattr(user, "raw_user_meta_data", None) or {}
+        if meta and meta.get("full_name"):
+            result["name"] = meta["full_name"]
+        return result
     except Exception:
         return None

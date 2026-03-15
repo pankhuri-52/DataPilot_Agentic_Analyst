@@ -62,17 +62,18 @@ def get_current_user_optional(authorization: str | None = Header(default=None)):
 
 
 @app.post("/auth/signup")
-def auth_signup(body: dict = Body(default={"email": "", "password": ""})):
+def auth_signup(body: dict = Body(default={"email": "", "password": "", "name": ""})):
     """Create a new user. Returns user and access_token."""
     email = (body or {}).get("email", "").strip()
     password = (body or {}).get("password", "")
+    name = (body or {}).get("name", "").strip() or None
     if not email or not password:
         raise HTTPException(status_code=400, detail="email and password are required")
     if len(password) < 6:
         raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
     try:
         from auth import sign_up
-        return sign_up(email, password)
+        return sign_up(email, password, name)
     except ValueError as e:
         if "must be set" in str(e).lower():
             raise HTTPException(

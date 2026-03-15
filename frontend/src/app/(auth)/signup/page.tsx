@@ -10,6 +10,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { AlertCircle, MailCheck } from "lucide-react";
 
 export default function SignupPage() {
+  const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -34,7 +35,7 @@ export default function SignupPage() {
     }
     setLoading(true);
     try {
-      const result = await signUp(email, password);
+      const result = await signUp(email, password, name.trim() || undefined);
       if (result.requiresConfirmation) {
         setConfirmationSent(true);
       } else {
@@ -105,6 +106,20 @@ export default function SignupPage() {
             </div>
           )}
           <form onSubmit={handleSubmit} className="space-y-4">
+            <div className="space-y-2">
+              <label htmlFor="name" className="text-sm font-medium">
+                Name
+              </label>
+              <Input
+                id="name"
+                type="text"
+                placeholder="Your name"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                autoComplete="name"
+                disabled={loading}
+              />
+            </div>
             <div className="space-y-2">
               <label htmlFor="email" className="text-sm font-medium">
                 Email

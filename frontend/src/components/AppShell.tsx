@@ -1,20 +1,23 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { MessageSquare, Database, LogIn, UserPlus, LogOut } from "lucide-react";
+import { MessageSquarePlus, MessageSquare, Database, LogIn, UserPlus, LogOut } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
+import { useChat } from "@/contexts/ChatContext";
 import { Button } from "@/components/ui/button";
-
-const navItems = [
-  { href: "/", label: "Chat", icon: MessageSquare },
-  { href: "/sources", label: "Data Sources", icon: Database },
-];
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const router = useRouter();
   const { user, loading, signOut } = useAuth();
+  const { startNewChat } = useChat();
+
+  const handleNewChat = () => {
+    startNewChat();
+    if (pathname !== "/") router.push("/");
+  };
 
   return (
     <div className="flex min-h-screen">
@@ -24,34 +27,52 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             DataPilot
           </span>
         </div>
-        <nav className="flex flex-1 flex-col gap-1 p-4">
-          {navItems.map((item) => {
-            const Icon = item.icon;
-            const isActive = pathname === item.href;
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                className={cn(
-                  "flex min-h-[44px] min-w-[44px] cursor-pointer items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors duration-200",
-                  isActive
-                    ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                    : "text-muted-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
-                )}
-              >
-                <Icon className="size-5 shrink-0" aria-hidden />
-                {item.label}
-              </Link>
-            );
-          })}
+        <nav className="flex flex-1 flex-col gap-1 p-4 overflow-y-auto">
+          <button
+            type="button"
+            onClick={handleNewChat}
+            className={cn(
+              "flex min-h-[44px] min-w-[44px] cursor-pointer items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors duration-200 w-full",
+              pathname === "/"
+                ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                : "text-muted-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
+            )}
+          >
+            <MessageSquarePlus className="size-5 shrink-0" aria-hidden />
+            New chat
+          </button>
+          <Link
+            href="/chats"
+            className={cn(
+              "flex min-h-[44px] min-w-[44px] cursor-pointer items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors duration-200 mt-2",
+              pathname === "/chats"
+                ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                : "text-muted-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
+            )}
+          >
+            <MessageSquare className="size-5 shrink-0" aria-hidden />
+            Chat History
+          </Link>
+          <Link
+            href="/sources"
+            className={cn(
+              "flex min-h-[44px] min-w-[44px] cursor-pointer items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors duration-200 mt-2",
+              pathname === "/sources"
+                ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                : "text-muted-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
+            )}
+          >
+            <Database className="size-5 shrink-0" aria-hidden />
+            Data Sources
+          </Link>
         </nav>
-        <div className="border-t border-sidebar-border p-4 space-y-2">
+        <div className="border-t border-sidebar-border p-4 space-y-2 shrink-0">
           {!loading && (
             <>
               {user ? (
                 <div className="space-y-2">
                   <p className="truncate text-xs text-muted-foreground" title={user.email}>
-                    {user.email}
+                    {user.name || user.email}
                   </p>
                   <Button
                     variant="ghost"
