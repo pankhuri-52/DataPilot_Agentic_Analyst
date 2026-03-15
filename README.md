@@ -17,6 +17,14 @@ This doc tracks setup and progress for the DataPilot hackathon POC.
 
 Your Google API key will be used for **Gemini** (LLM for agents) and optionally **BigQuery** (if you use BigQuery for the POC).
 
+For **auth and chat persistence**, add Supabase credentials to `.env`:
+```env
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_ANON_KEY=your_anon_key
+SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
+```
+Run the migration in `backend/supabase_migrations/migrations/001_conversations.sql` in the Supabase SQL Editor. See `backend/supabase_migrations/README.md` for details.
+
 ---
 
 ## Next steps (POC roadmap)
@@ -36,13 +44,13 @@ We’ll follow this order and update the progress section below as we go.
 | 9 | **Agent trace UI** – Show step-by-step reasoning and decisions | ✅ Done |
 | 10 | **Polish** – Basic charts, cost estimate display, guardrails messaging | ⬜ Pending |
 | 11 | **Real-time agent logs** – SSE streaming of agent progress (planner → discovery → executor → validator → visualization) | ✅ Done |
-| 12 | **Signin/Signup page** – Auth flow; only authenticated users can access the app | 🔄 In progress |
+| 12 | **Signin/Signup** – Auth flow via Supabase (login, signup, JWT validation); chat persistence for authenticated users | ✅ Done |
 
 ---
 
 ## What to do next
 
-**Next step: 12 (in progress).** Signin/Signup page and auth – only authenticated users can access the app. Also pending: step 10 (charts, cost estimate, guardrails).
+**Next step: 10.** Polish – charts, cost estimate, guardrails messaging. Signin/Signup and chat persistence are done.
 
 ---
 
@@ -60,6 +68,7 @@ We’ll follow this order and update the progress section below as we go.
 - **Step 6 (BigQuery POC)** – DDL and INSERT scripts in `backend/bigquery/scripts/`: use `01_ddl.sql` and `02_inserts.sql` in the BigQuery console (replace `YOUR_PROJECT_ID` and `YOUR_DATASET_ID`). See `backend/bigquery/scripts/README_DATA_MODEL.md` for data model and example queries. Use `GET /bigquery/tables` to verify.
 - **Steps 7–9 done** – Frontend with shadcn/ui (Input, Button, Card, Accordion, Table, Alert, Badge, Skeleton). Connected to `POST /ask`; displays results, explanation, agent trace, and feasibility badges.
 - **Step 11 done** – Real-time agent progress: stream intermediate agent states (planner → discovery → executor → validator → visualization) to the UI via `POST /ask/stream`. Uses Server-Sent Events (SSE) over HTTP; users see live logs as each agent runs.
+- **Step 12 done** – Signin/Signup: Supabase Auth integration. Backend endpoints `POST /auth/signup`, `POST /auth/login`, `GET /auth/me`. Frontend login (`/login`), signup (`/signup`), forgot-password, reset-password pages. AuthContext for session management. Chat history persisted in Supabase for authenticated users.
 
 ---
 
@@ -146,6 +155,12 @@ Example questions you can answer later with the agent: *“What were total sales
 |----------|-------------|
 | `POST /ask` | Submit a question; returns full response when pipeline completes (blocking). |
 | `POST /ask/stream` | Submit a question; streams real-time agent progress via SSE, then returns full response in final event. Use for live logs in the UI. |
+| `POST /auth/signup` | Create a new user (email/password). Returns user and access_token. |
+| `POST /auth/login` | Sign in with email/password. Returns user and access_token. |
+| `GET /auth/me` | Return current user if valid JWT in Authorization header. |
+| `GET /conversations` | List chat conversations for authenticated user. |
+| `POST /conversations` | Create a new conversation. |
+| `GET /conversations/:id/messages` | List messages in a conversation. |
 | `POST /llm/chat` | Basic Gemini test: send a message, get a reply. |
 | `GET /bigquery/tables` | List BigQuery POC tables (requires BigQuery config in `.env`). |
 
@@ -162,4 +177,4 @@ Example questions you can answer later with the agent: *“What were total sales
 
 ---
 
-*Last updated: step 11 done – Real-time agent logs via `POST /ask/stream`; next: step 10 (polish).*
+*Last updated: step 12 done – Signin/Signup and chat persistence via Supabase; next: step 10 (polish).*
