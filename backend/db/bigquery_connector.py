@@ -70,6 +70,21 @@ class BigQueryConnector(DatabaseConnector):
         rows = list(query_job.result(max_results=1000))
         return [{k: _serialize(v) for k, v in dict(row).items()} for row in rows]
 
+    def dry_run_estimate(self, sql: str) -> tuple[int, float]:
+        """
+        Run a dry run to estimate bytes scanned and cost.
+        Returns (bytes_scanned, estimated_cost_usd).
+        BigQuery on-demand: ~$5 per TiB processed.
+        """
+        from google.cloud import bigquery
+        client = bigquery.Client(project=self.project_id)
+        job_config = bigquery.QueryJobConfig(dry_run=True, use_query_cache=False)
+        query_job = client.query(sql, job_config=job_config)
+        bytes_processed = query_job.total_bytes_processed or 0
+        # $5 per TiB = $5 / (1024**4) per byte
+        cost_usd = (bytes_processed / (1024**4)) * 5.0
+        return bytes_processed, cost_usd
+
     def run_date_range_diagnostic(self, schema: dict) -> tuple[dict | None, str | None]:
         date_cols = _get_date_columns(schema)
         if not date_cols:

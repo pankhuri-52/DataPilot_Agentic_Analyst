@@ -11,7 +11,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { BarChart3, Table2, Code } from "lucide-react";
+import { BarChart3, Table2, Code, CheckCircle2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DataChart, type ChartSpec } from "./DataChart";
 
@@ -62,6 +62,12 @@ export function ArtifactCard({
                 }
               >
                 {dataFeasibility}
+              </Badge>
+            )}
+            {results.length > 0 && (
+              <Badge variant="outline" className="gap-1 text-emerald-600 dark:text-emerald-400 border-emerald-500/50">
+                <CheckCircle2 className="size-3" aria-hidden />
+                Executed
               </Badge>
             )}
             {validationOk !== undefined && (

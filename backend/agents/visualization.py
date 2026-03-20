@@ -8,7 +8,7 @@ from agents.state import TraceEntry
 
 class VisualizationOutput(BaseModel):
     """Output from Visualization Agent."""
-    chart_type: str = Field(description="bar | line | pie | table")
+    chart_type: str = Field(description="bar | line | pie | area | table")
     x_field: str | None = Field(default=None, description="Column name for x-axis")
     y_field: str | None = Field(default=None, description="Column name for y-axis")
     title: str | None = Field(default=None, description="Chart title")
@@ -28,8 +28,21 @@ Query results (first 20 rows):
 
 Column names in results: {columns}
 
+CHART TYPE SELECTION (choose based on the question and data shape – do NOT default to bar):
+- "line" or "area": Time-series, trends over dates, growth over time. Use when x-axis is date/time or sequential. Area for cumulative or filled trends.
+- "bar": Categorical comparison only (e.g. "sales by region", "top 5 products"). Use when comparing discrete categories, NOT for time trends.
+- "pie": Part-of-whole, proportions, share of total. Max ~8 slices. Use for "what percentage", "breakdown by".
+- "table": Raw lists, many columns, detailed lookup. Use when user needs to see exact values or many dimensions.
+
+Examples:
+- "Sales over last quarter" → line or area (time trend)
+- "Revenue by region" → bar (categorical)
+- "Market share by segment" → pie (proportions)
+- "Top 10 products by revenue" → bar (ranking)
+- "Monthly trend" → line (time)
+
 Your job:
-1. Choose the best chart type: "bar" for categorical comparison, "line" for trends over time, "pie" for proportions (max ~8 slices), "table" for detailed data.
+1. Analyze the user question and data. Pick chart_type that best fits the question type (time → line/area, categories → bar, proportions → pie).
 2. Set x_field and y_field to column names from the results. For pie charts, use one value column.
 3. Write a concise, business-friendly explanation (2-4 sentences) summarizing the key insights.
 4. Set title to a short, descriptive chart title.

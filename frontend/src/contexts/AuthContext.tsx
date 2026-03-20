@@ -33,6 +33,7 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 const TOKEN_KEY = "datapilot_access_token";
+const REFRESH_KEY = "datapilot_refresh_token";
 const USER_KEY = "datapilot_user";
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -43,6 +44,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (typeof window === "undefined") return null;
     return localStorage.getItem(TOKEN_KEY);
   }, []);
+
+  const clearSession = useCallback(() => {
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(REFRESH_KEY);
+    localStorage.removeItem(USER_KEY);
+    setUser(null);
+  }, []);
+
+  const persistSession = useCallback(
+    (accessToken: string, refreshToken: string | null | undefined, userData: User) => {
+      localStorage.setItem(TOKEN_KEY, accessToken);
+      if (refreshToken) localStorage.setItem(REFRESH_KEY, refreshToken);
+      localStorage.setItem(USER_KEY, JSON.stringify(userData));
+      setUser(userData);
+    },
+    []
+  );
 
   const loadUser = useCallback(async () => {
     const token = getAccessToken();
@@ -58,19 +76,44 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const data = await res.json();
       if (data?.user) {
         setUser(data.user);
-      } else {
-        localStorage.removeItem(TOKEN_KEY);
-        localStorage.removeItem(USER_KEY);
-        setUser(null);
+        setLoading(false);
+        return;
       }
+
+      const refreshToken = localStorage.getItem(REFRESH_KEY);
+      if (!refreshToken) {
+        clearSession();
+        setLoading(false);
+        return;
+      }
+
+      const refreshRes = await fetch(`${API_BASE}/auth/refresh`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refresh_token: refreshToken }),
+      });
+      const refreshData = await refreshRes.json().catch(() => ({}));
+      if (
+        !refreshRes.ok ||
+        !refreshData.access_token ||
+        !refreshData.user
+      ) {
+        clearSession();
+        setLoading(false);
+        return;
+      }
+
+      persistSession(
+        refreshData.access_token,
+        refreshData.refresh_token ?? refreshToken,
+        refreshData.user as User
+      );
     } catch {
-      localStorage.removeItem(TOKEN_KEY);
-      localStorage.removeItem(USER_KEY);
-      setUser(null);
+      clearSession();
     } finally {
       setLoading(false);
     }
-  }, [getAccessToken]);
+  }, [getAccessToken, clearSession, persistSession]);
 
   useEffect(() => {
     loadUser();
@@ -90,12 +133,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const token = data.access_token;
       const userData = data.user;
       if (token && userData) {
-        localStorage.setItem(TOKEN_KEY, token);
-        localStorage.setItem(USER_KEY, JSON.stringify(userData));
-        setUser(userData);
+        persistSession(token, data.refresh_token, userData);
       }
     },
-    []
+    [persistSession]
   );
 
   const signUp = useCallback(
@@ -113,20 +154,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const userData = data.user;
       const requiresConfirmation = data.requires_confirmation === true;
       if (token && userData && !requiresConfirmation) {
-        localStorage.setItem(TOKEN_KEY, token);
-        localStorage.setItem(USER_KEY, JSON.stringify(userData));
-        setUser(userData);
+        persistSession(token, data.refresh_token, userData);
       }
       return { requiresConfirmation: requiresConfirmation || undefined };
     },
-    []
+    [persistSession]
   );
 
   const signOut = useCallback(() => {
-    localStorage.removeItem(TOKEN_KEY);
-    localStorage.removeItem(USER_KEY);
-    setUser(null);
-  }, []);
+    clearSession();
+  }, [clearSession]);
 
   return (
     <AuthContext.Provider

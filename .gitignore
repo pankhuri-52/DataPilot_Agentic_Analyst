@@ -17,6 +17,7 @@ env/
 .next/
 out/
 dist/
+*.tsbuildinfo
 *.egg-info/
 .idea/
 .vscode/

@@ -10,7 +10,12 @@ import { PlanCard } from "./PlanCard";
 import { ArtifactCard } from "./ArtifactCard";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/AuthContext";
-import { useChat } from "@/contexts/ChatContext";
+import {
+  useChat,
+  type Conversation,
+  type Message,
+  conversationMessagesKey,
+} from "@/contexts/ChatContext";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -26,7 +31,10 @@ interface AskResponse {
   data_feasibility?: string;
   nearest_plan?: Record<string, unknown>;
   missing_explanation?: string;
+  tables_used?: string[];
   sql?: string;
+  bytes_scanned?: number;
+  estimated_cost?: number;
   results?: Record<string, unknown>[];
   validation_ok?: boolean;
   chart_spec?: {
@@ -38,6 +46,20 @@ interface AskResponse {
   explanation?: string;
   trace?: TraceEntry[];
   conversation_id?: string;
+  thread_id?: string;
+}
+
+interface PendingInterrupt {
+  reason: string;
+  data: Record<string, unknown>;
+  thread_id: string;
+  trace?: TraceEntry[];
+  plan?: Record<string, unknown>;
+  data_feasibility?: string;
+  tables_used?: string[];
+  sql?: string;
+  bytes_scanned?: number;
+  estimated_cost?: number;
 }
 
 function extractPlanFromTrace(trace: TraceEntry[]): Record<string, unknown> | undefined {
@@ -56,6 +78,7 @@ function extractPlanFromTrace(trace: TraceEntry[]): Record<string, unknown> | un
     return {
       is_valid: false,
       clarifying_questions: o.clarifying_questions,
+      query_scope: typeof o.query_scope === "string" ? o.query_scope : undefined,
     };
   }
   return undefined;
@@ -65,10 +88,12 @@ export function DataPilotClient() {
   const { user, getAccessToken } = useAuth();
   const {
     messages,
-    setMessages,
+    patchMessages,
+    getMessagesForKey,
     currentConversationId,
     setCurrentConversationId,
     fetchConversations,
+    upsertConversation,
   } = useChat();
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
@@ -83,40 +108,291 @@ export function DataPilotClient() {
     scrollToBottom();
   }, [messages]);
 
+  /** User text for the turn that owns this assistant bubble (for persistence on /ask/continue). */
+  function precedingUserContent(convKey: string, assistantMessageId: string): string {
+    const list = getMessagesForKey(convKey);
+    const idx = list.findIndex((m) => m.id === assistantMessageId);
+    for (let i = idx - 1; i >= 0; i--) {
+      const m = list[i];
+      if (m.role === "user" && m.content?.trim()) return m.content.trim();
+    }
+    return "";
+  }
+
+  async function handleContinue(message: Message, approved = true) {
+    const threadId = message.pendingInterrupt?.thread_id;
+    if (!threadId) return;
+    const assistantMessageId = message.id;
+    const convKey = conversationMessagesKey(message.conversationId ?? currentConversationId);
+
+    setLoading(true);
+    setError(null);
+    patchMessages(convKey, (prev) =>
+      prev.map((m) =>
+        m.id === assistantMessageId
+          ? { ...m, loading: true, pendingInterrupt: undefined }
+          : m
+      )
+    );
+
+    const token = getAccessToken();
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+
+    const continueConvId = message.conversationId ?? currentConversationId ?? undefined;
+
+    try {
+      const res = await fetch(`${API_BASE}/ask/continue`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          thread_id: threadId,
+          conversation_id: continueConvId,
+          approved,
+          original_query: precedingUserContent(convKey, assistantMessageId) || undefined,
+        }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `Request failed: ${res.status}`);
+      }
+
+      const reader = res.body?.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      if (!reader) throw new Error("No response body");
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n\n");
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          const dataMatch = line.match(/^data:\s*(.+)$/m);
+          if (!dataMatch) continue;
+
+          try {
+            const event = JSON.parse(dataMatch[1].trim());
+            if (event.type === "progress") {
+              patchMessages(convKey, (prev) =>
+                prev.map((m) => {
+                  if (m.id !== assistantMessageId) return m;
+                  const newTrace = [...(m.liveTrace ?? []), event.trace_entry];
+                  return { ...m, liveTrace: newTrace };
+                })
+              );
+            } else if (event.type === "complete") {
+              const convId = event.response?.conversation_id as string | undefined;
+              if (convId) {
+                setCurrentConversationId(convId);
+                fetchConversations();
+              }
+              patchMessages(convKey, (prev) =>
+                prev.map((m) =>
+                  m.id === assistantMessageId
+                    ? {
+                        ...m,
+                        loading: false,
+                        conversationId: convId ?? m.conversationId,
+                        liveTrace: event.response?.trace ?? m.liveTrace,
+                        response: event.response,
+                        plan: event.response?.plan ?? m.plan,
+                      }
+                    : m
+                )
+              );
+            } else if (event.type === "interrupt") {
+              const convId = event.conversation_id as string | undefined;
+              if (convId) {
+                setCurrentConversationId(convId);
+                fetchConversations();
+              }
+              patchMessages(convKey, (prev) =>
+                prev.map((m) =>
+                  m.id === assistantMessageId
+                    ? {
+                        ...m,
+                        loading: false,
+                        conversationId: convId ?? m.conversationId,
+                        liveTrace: (event.trace ?? m.liveTrace) as TraceEntry[],
+                        pendingInterrupt: {
+                          reason: event.data?.reason ?? "unknown",
+                          data: event.data ?? {},
+                          thread_id: event.thread_id ?? threadId,
+                          trace: event.trace,
+                          plan: event.plan,
+                          tables_used: event.tables_used,
+                          sql: event.sql,
+                          bytes_scanned: event.bytes_scanned,
+                          estimated_cost: event.estimated_cost,
+                        },
+                      }
+                    : m
+                )
+              );
+            } else if (event.type === "error") {
+              patchMessages(convKey, (prev) =>
+                prev.map((m) =>
+                  m.id === assistantMessageId ? { ...m, loading: false, error: event.message ?? "Agent error" } : m
+                )
+              );
+            }
+          } catch {
+            // Ignore parse errors
+          }
+        }
+      }
+
+      if (buffer.trim()) {
+        const dataMatch = buffer.match(/^data:\s*(.+)$/m);
+        if (dataMatch) {
+          try {
+            const event = JSON.parse(dataMatch[1].trim());
+            if (event.type === "complete") {
+              const convId = event.response?.conversation_id as string | undefined;
+              if (convId) {
+                setCurrentConversationId(convId);
+                fetchConversations();
+              }
+              patchMessages(convKey, (prev) =>
+                prev.map((m) =>
+                  m.id === assistantMessageId
+                    ? {
+                        ...m,
+                        loading: false,
+                        conversationId: convId ?? m.conversationId,
+                        liveTrace: event.response?.trace ?? m.liveTrace,
+                        response: event.response,
+                        plan: event.response?.plan ?? m.plan,
+                      }
+                    : m
+                )
+              );
+            } else if (event.type === "interrupt") {
+              const convId = event.conversation_id as string | undefined;
+              if (convId) {
+                setCurrentConversationId(convId);
+                fetchConversations();
+              }
+              patchMessages(convKey, (prev) =>
+                prev.map((m) =>
+                  m.id === assistantMessageId
+                    ? {
+                        ...m,
+                        loading: false,
+                        conversationId: convId ?? m.conversationId,
+                        liveTrace: (event.trace ?? m.liveTrace) as TraceEntry[],
+                        pendingInterrupt: {
+                          reason: event.data?.reason ?? "unknown",
+                          data: event.data ?? {},
+                          thread_id: event.thread_id ?? threadId,
+                          trace: event.trace,
+                          plan: event.plan,
+                          tables_used: event.tables_used,
+                          sql: event.sql,
+                          bytes_scanned: event.bytes_scanned,
+                          estimated_cost: event.estimated_cost,
+                        },
+                      }
+                    : m
+                )
+              );
+            } else if (event.type === "error") {
+              patchMessages(convKey, (prev) =>
+                prev.map((m) =>
+                  m.id === assistantMessageId ? { ...m, loading: false, error: event.message ?? "Agent error" } : m
+                )
+              );
+            }
+          } catch {
+            // Ignore
+          }
+        }
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Something went wrong");
+      patchMessages(convKey, (prev) =>
+        prev.map((m) =>
+          m.id === assistantMessageId
+            ? { ...m, loading: false, error: err instanceof Error ? err.message : "Something went wrong" }
+            : m
+        )
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!query.trim()) return;
+    const text = query.trim();
+    if (!text) return;
 
-    const userMessage = {
-      id: crypto.randomUUID(),
-      role: "user" as const,
-      content: query.trim(),
-    };
-    setMessages((prev) => [...prev, userMessage]);
+    const token = getAccessToken();
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+
+    let streamConversationId = currentConversationId;
+    if (user && token && !streamConversationId) {
+      const title = text.length > 80 ? `${text.slice(0, 80)}…` : text;
+      try {
+        const cr = await fetch(`${API_BASE}/conversations`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ title }),
+        });
+        if (!cr.ok) {
+          const errBody = await cr.json().catch(() => ({}));
+          throw new Error(
+            typeof errBody.detail === "string" ? errBody.detail : "Could not create conversation"
+          );
+        }
+        const conv = (await cr.json()) as Conversation;
+        upsertConversation(conv);
+        streamConversationId = conv.id;
+        setCurrentConversationId(conv.id);
+        fetchConversations();
+      } catch (createErr) {
+        setError(createErr instanceof Error ? createErr.message : "Could not create conversation");
+        return;
+      }
+    }
+
+    const streamKey = conversationMessagesKey(streamConversationId);
+
     setQuery("");
     setLoading(true);
     setError(null);
 
+    const userMessage = {
+      id: crypto.randomUUID(),
+      role: "user" as const,
+      content: text,
+      conversationId: streamConversationId ?? undefined,
+    };
     const assistantMessageId = crypto.randomUUID();
     const assistantMessage = {
       id: assistantMessageId,
       role: "assistant" as const,
       loading: true,
       liveTrace: [] as TraceEntry[],
+      conversationId: streamConversationId ?? undefined,
     };
-    setMessages((prev) => [...prev, assistantMessage]);
-
-    const token = getAccessToken();
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (token) headers["Authorization"] = `Bearer ${token}`;
+    patchMessages(streamKey, (prev) => [...prev, userMessage]);
+    patchMessages(streamKey, (prev) => [...prev, assistantMessage]);
 
     try {
       const res = await fetch(`${API_BASE}/ask/stream`, {
         method: "POST",
         headers,
         body: JSON.stringify({
-          query: query.trim(),
-          conversation_id: currentConversationId || undefined,
+          query: text,
+          conversation_id: streamConversationId || undefined,
         }),
       });
 
@@ -148,7 +424,7 @@ export function DataPilotClient() {
           try {
             const event = JSON.parse(dataMatch[1].trim());
             if (event.type === "progress") {
-              setMessages((prev) =>
+              patchMessages(streamKey, (prev) =>
                 prev.map((m) => {
                   if (m.id !== assistantMessageId) return m;
                   const newTrace = [...(m.liveTrace ?? []), event.trace_entry];
@@ -161,17 +437,18 @@ export function DataPilotClient() {
                 })
               );
             } else if (event.type === "complete") {
-              const convId = event.response?.conversation_id;
+              const convId = event.response?.conversation_id as string | undefined;
               if (convId) {
                 setCurrentConversationId(convId);
                 fetchConversations();
               }
-              setMessages((prev) =>
+              patchMessages(streamKey, (prev) =>
                 prev.map((m) =>
                   m.id === assistantMessageId
                     ? {
                         ...m,
                         loading: false,
+                        conversationId: convId ?? m.conversationId,
                         liveTrace: event.response?.trace ?? m.liveTrace,
                         response: event.response,
                         plan: event.response?.plan ?? m.plan,
@@ -179,8 +456,37 @@ export function DataPilotClient() {
                     : m
                 )
               );
+            } else if (event.type === "interrupt") {
+              const convId = event.conversation_id as string | undefined;
+              if (convId) {
+                setCurrentConversationId(convId);
+                fetchConversations();
+              }
+              patchMessages(streamKey, (prev) =>
+                prev.map((m) =>
+                  m.id === assistantMessageId
+                    ? {
+                        ...m,
+                        loading: false,
+                        conversationId: convId ?? m.conversationId,
+                        liveTrace: (event.trace ?? m.liveTrace) as TraceEntry[],
+                        pendingInterrupt: {
+                          reason: event.data?.reason ?? "unknown",
+                          data: event.data ?? {},
+                          thread_id: event.thread_id ?? "",
+                          trace: event.trace,
+                          plan: event.plan,
+                          tables_used: event.tables_used,
+                          sql: event.sql,
+                          bytes_scanned: event.bytes_scanned,
+                          estimated_cost: event.estimated_cost,
+                        },
+                      }
+                    : m
+                )
+              );
             } else if (event.type === "error") {
-              setMessages((prev) =>
+              patchMessages(streamKey, (prev) =>
                 prev.map((m) =>
                   m.id === assistantMessageId
                     ? {
@@ -204,17 +510,18 @@ export function DataPilotClient() {
           try {
             const event = JSON.parse(dataMatch[1].trim());
             if (event.type === "complete") {
-              const convId = event.response?.conversation_id;
+              const convId = event.response?.conversation_id as string | undefined;
               if (convId) {
                 setCurrentConversationId(convId);
                 fetchConversations();
               }
-              setMessages((prev) =>
+              patchMessages(streamKey, (prev) =>
                 prev.map((m) =>
                   m.id === assistantMessageId
                     ? {
                         ...m,
                         loading: false,
+                        conversationId: convId ?? m.conversationId,
                         liveTrace: event.response?.trace ?? m.liveTrace,
                         response: event.response,
                         plan: event.response?.plan ?? m.plan,
@@ -222,8 +529,37 @@ export function DataPilotClient() {
                     : m
                 )
               );
+            } else if (event.type === "interrupt") {
+              const convId = event.conversation_id as string | undefined;
+              if (convId) {
+                setCurrentConversationId(convId);
+                fetchConversations();
+              }
+              patchMessages(streamKey, (prev) =>
+                prev.map((m) =>
+                  m.id === assistantMessageId
+                    ? {
+                        ...m,
+                        loading: false,
+                        conversationId: convId ?? m.conversationId,
+                        liveTrace: (event.trace ?? m.liveTrace) as TraceEntry[],
+                        pendingInterrupt: {
+                          reason: event.data?.reason ?? "unknown",
+                          data: event.data ?? {},
+                          thread_id: event.thread_id ?? "",
+                          trace: event.trace,
+                          plan: event.plan,
+                          tables_used: event.tables_used,
+                          sql: event.sql,
+                          bytes_scanned: event.bytes_scanned,
+                          estimated_cost: event.estimated_cost,
+                        },
+                      }
+                    : m
+                )
+              );
             } else if (event.type === "error") {
-              setMessages((prev) =>
+              patchMessages(streamKey, (prev) =>
                 prev.map((m) =>
                   m.id === assistantMessageId
                     ? {
@@ -242,7 +578,7 @@ export function DataPilotClient() {
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong");
-      setMessages((prev) =>
+      patchMessages(streamKey, (prev) =>
         prev.map((m) =>
           m.id === assistantMessageId
             ? {
@@ -308,7 +644,63 @@ export function DataPilotClient() {
                     </Alert>
                   )}
 
-                  {message.loading && (
+                  {message.pendingInterrupt && (
+                    <div className="space-y-4">
+                      {message.plan && <PlanCard plan={message.plan} />}
+                      {(message.liveTrace ?? []).length > 0 && (
+                        <StepLoader liveTrace={message.liveTrace ?? []} isLoading={false} />
+                      )}
+                      <div className="rounded-lg border border-primary/30 bg-accent/20 p-4 space-y-3">
+                        {message.pendingInterrupt.reason === "approve_tables" && (
+                          <>
+                            <p className="text-xs font-medium">Tables to be used:</p>
+                            <ul className="text-xs text-muted-foreground list-disc list-inside">
+                              {((message.pendingInterrupt.tables_used ?? message.pendingInterrupt.data?.tables ?? []) as string[]).map((t) => (
+                                <li key={t}>{t}</li>
+                              ))}
+                            </ul>
+                            <p className="text-xs text-muted-foreground">Proceed with these tables?</p>
+                          </>
+                        )}
+                        {message.pendingInterrupt.reason === "execute_query" && (
+                          <>
+                            <p className="text-xs font-medium">Query ready to execute</p>
+                            {message.pendingInterrupt.sql && (
+                              <pre className="text-[11px] overflow-x-auto rounded bg-muted/50 p-2 max-h-32">
+                                {message.pendingInterrupt.sql}
+                              </pre>
+                            )}
+                            {(message.pendingInterrupt.bytes_scanned != null || message.pendingInterrupt.estimated_cost != null) && (
+                              <p className="text-xs text-muted-foreground">
+                                {message.pendingInterrupt.bytes_scanned != null &&
+                                  `~${(message.pendingInterrupt.bytes_scanned / (1024 * 1024)).toFixed(2)} MB scanned`}
+                                {message.pendingInterrupt.estimated_cost != null &&
+                                  ` · ~$${message.pendingInterrupt.estimated_cost.toFixed(6)} estimated cost`}
+                              </p>
+                            )}
+                            <p className="text-xs text-muted-foreground">Execute this query?</p>
+                          </>
+                        )}
+                        <div className="flex gap-2">
+                          <Button
+                            size="sm"
+                            onClick={() => message.pendingInterrupt && handleContinue(message, true)}
+                          >
+                            Yes
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => message.pendingInterrupt && handleContinue(message, false)}
+                          >
+                            No
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {message.loading && !message.pendingInterrupt && (
                     <div className="space-y-4">
                       {message.plan && (
                         <PlanCard plan={message.plan} />

@@ -1,5 +1,6 @@
 """
-Query Execution Agent – generates SQL and executes via generic DB connector.
+Query Execution Agent – executes SQL via generic DB connector.
+Uses SQL from Optimizer when available; otherwise generates SQL (legacy path).
 """
 import os
 import json
@@ -90,20 +91,19 @@ def run_executor(state: dict) -> dict:
         trace.append(TraceEntry(agent="executor", status="error", message="No database configured. Set BIGQUERY_PROJECT_ID or DATABASE_TYPE=postgres with POSTGRES_URL.").model_dump())
         return {"trace": trace}
 
-    trace.append(
-        TraceEntry(agent="executor", status="info", message="Generating SQL from analysis plan...").model_dump()
-    )
+    sql = state.get("sql")
+    if not sql:
+        trace.append(
+            TraceEntry(agent="executor", status="info", message="Generating SQL from analysis plan...").model_dump()
+        )
+        project_id = os.getenv("BIGQUERY_PROJECT_ID")
+        dataset_id = os.getenv("BIGQUERY_DATASET", "retail_data")
+        schema = load_schema()
+        schema_json = json.dumps(schema, indent=2)
+        metrics = effective_plan.get("metrics", [])
+        dimensions = effective_plan.get("dimensions", [])
+        filters = effective_plan.get("filters", {})
 
-    project_id = os.getenv("BIGQUERY_PROJECT_ID")
-    dataset_id = os.getenv("BIGQUERY_DATASET", "retail_data")
-    schema = load_schema()
-    schema_json = json.dumps(schema, indent=2)
-
-    metrics = effective_plan.get("metrics", [])
-    dimensions = effective_plan.get("dimensions", [])
-    filters = effective_plan.get("filters", {})
-
-    try:
         llm = get_gemini()
         dialect = connector.dialect
         if dialect == "postgres":
@@ -126,14 +126,19 @@ def run_executor(state: dict) -> dict:
             )
         response = llm.invoke(prompt)
         sql = (response.content if hasattr(response, "content") else str(response)).strip()
-        # Remove markdown code blocks if present
         if sql.startswith("```"):
             sql = re.sub(r"^```\w*\n?", "", sql)
             sql = re.sub(r"\n?```$", "", sql)
         sql = sql.strip()
+    else:
+        trace.append(
+            TraceEntry(agent="executor", status="info", message="Using SQL from Optimizer...").model_dump()
+        )
+        schema = load_schema()
 
+    try:
         if FORBIDDEN_SQL_PATTERNS.search(sql):
-            trace.append(TraceEntry(agent="executor", status="error", message="Generated SQL contains forbidden operations").model_dump())
+            trace.append(TraceEntry(agent="executor", status="error", message="SQL contains forbidden operations").model_dump())
             return {"trace": trace}
 
         trace.append(

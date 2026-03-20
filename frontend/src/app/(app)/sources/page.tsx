@@ -1,64 +1,66 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Plus, Database, FileSpreadsheet, Trash2, Server, Cloud } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Plus, Database, Server, Cloud, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-interface DataSource {
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
+interface ApiSource {
   id: string;
-  name: string;
-  type: "bigquery" | "csv" | "postgres" | "mysql" | "mongodb";
-  status: "connected" | "pending" | "error";
-  lastSynced?: string;
+  type: string;
+  healthy: boolean;
+  label: string;
+  detail?: string | null;
 }
 
-const MOCK_SOURCES: DataSource[] = [
-  {
-    id: "1",
-    name: "Retail Analytics",
-    type: "bigquery",
-    status: "connected",
-    lastSynced: "2 hours ago",
-  },
-  {
-    id: "2",
-    name: "Sales Export Q1",
-    type: "csv",
-    status: "connected",
-    lastSynced: "1 day ago",
-  },
-];
+interface StatusResponse {
+  configured: boolean;
+  sources: ApiSource[];
+  hint?: string;
+}
 
 const typeLabels: Record<string, string> = {
   bigquery: "BigQuery",
-  csv: "CSV",
   postgres: "PostgreSQL",
-  mysql: "MySQL",
-  mongodb: "MongoDB",
-};
-
-const typeIcons: Record<string, React.ElementType> = {
-  bigquery: Cloud,
-  csv: FileSpreadsheet,
-  postgres: Server,
-  mysql: Database,
-  mongodb: Database,
+  postgresql: "PostgreSQL",
 };
 
 export default function SourcesPage() {
-  const [sources, setSources] = useState<DataSource[]>(MOCK_SOURCES);
+  const [status, setStatus] = useState<StatusResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState<string | null>(null);
   const [showAddForm, setShowAddForm] = useState(false);
 
-  const addSource = () => {
-    setShowAddForm(true);
-  };
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      setFetchError(null);
+      try {
+        const res = await fetch(`${API_BASE}/data-sources/status`);
+        const data = (await res.json()) as StatusResponse;
+        if (!cancelled) setStatus(data);
+      } catch {
+        if (!cancelled) {
+          setFetchError("Could not reach the API. Is the backend running?");
+          setStatus(null);
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
-  const removeSource = (id: string) => {
-    setSources((prev) => prev.filter((s) => s.id !== id));
-  };
+  const sources = status?.sources ?? [];
+  const hint = status?.hint;
 
   return (
     <div className="flex flex-col min-h-screen">
@@ -68,94 +70,83 @@ export default function SourcesPage() {
             Data Sources
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Connect and manage your data sources for analytics.
+            Your analytics warehouse is configured via environment variables. This page shows live
+            connection status from the API.
           </p>
         </div>
       </header>
       <div className="flex-1 overflow-auto">
         <div className="mx-auto max-w-4xl px-6 py-6 space-y-6">
+          {fetchError && (
+            <Alert variant="destructive" className="rounded-lg">
+              <AlertTitle>Connection error</AlertTitle>
+              <AlertDescription>{fetchError}</AlertDescription>
+            </Alert>
+          )}
+
+          {loading && (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="size-4 animate-spin" aria-hidden />
+              Loading source status…
+            </div>
+          )}
+
+          {!loading && !status?.configured && (
+            <Alert className="rounded-lg border-dashed">
+              <Database className="size-4" aria-hidden />
+              <AlertTitle>No warehouse configured</AlertTitle>
+              <AlertDescription>
+                {hint ||
+                  "Set BIGQUERY_PROJECT_ID and BIGQUERY_DATASET in .env, or DATABASE_TYPE=postgres with POSTGRES_URL."}
+              </AlertDescription>
+            </Alert>
+          )}
+
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-medium text-muted-foreground">
-              {sources.length} source{sources.length !== 1 ? "s" : ""} connected
+              {sources.length} active source{sources.length !== 1 ? "s" : ""}
             </h2>
-            <Button
-              onClick={addSource}
-              className="cursor-pointer"
-              size="sm"
-            >
+            <Button onClick={() => setShowAddForm(true)} className="cursor-pointer" size="sm">
               <Plus className="size-4 mr-2" aria-hidden />
               Add source
             </Button>
           </div>
 
-          {sources.length === 0 ? (
-            <Card className="border-dashed">
-              <CardContent className="flex flex-col items-center justify-center py-16">
-                <Database className="size-12 text-muted-foreground/50 mb-4" aria-hidden />
-                <p className="text-sm font-medium text-foreground">No data sources yet</p>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  Connect your first data source to start asking questions.
-                </p>
-                <Button
-                  onClick={addSource}
-                  variant="outline"
-                  className="mt-2 cursor-pointer"
-                >
-                  <Plus className="size-4 mr-2" aria-hidden />
-                  Add data source
-                </Button>
-              </CardContent>
-            </Card>
-          ) : (
+          {sources.length > 0 && (
             <div className="space-y-4">
               {sources.map((source) => {
-                const Icon = typeIcons[source.type] ?? Database;
+                const t = (source.type || "").toLowerCase();
+                const Icon = t === "bigquery" ? Cloud : Server;
+                const label = typeLabels[t] ?? source.type;
+                const ok = source.healthy;
                 return (
                   <Card
                     key={source.id}
-                    className="transition-colors duration-200 hover:border-primary/20 cursor-pointer"
+                    className="transition-colors duration-200 hover:border-primary/20"
                   >
                     <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                      <div className="flex items-center gap-3">
-                        <div className="flex size-10 items-center justify-center rounded-lg bg-muted">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-muted">
                           <Icon className="size-5 text-muted-foreground" aria-hidden />
                         </div>
-                        <div>
-                          <CardTitle className="text-base font-medium">
-                            {source.name}
+                        <div className="min-w-0">
+                          <CardTitle className="text-base font-medium truncate">
+                            {source.label || label}
                           </CardTitle>
-                          <CardDescription>
-                            {typeLabels[source.type]}
-                            {source.lastSynced && (
-                              <span className="ml-2">· {source.lastSynced}</span>
-                            )}
-                          </CardDescription>
+                          <CardDescription>{label}</CardDescription>
+                          {source.detail && !ok && (
+                            <p className="mt-1 text-xs text-destructive break-words">{source.detail}</p>
+                          )}
                         </div>
                       </div>
-                      <div className="flex items-center gap-2">
-                        <span
-                          className={cn(
-                            "inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium",
-                            source.status === "connected" &&
-                              "bg-primary/10 text-primary",
-                            source.status === "pending" &&
-                              "bg-primary/5 text-muted-foreground",
-                            source.status === "error" &&
-                              "bg-destructive/10 text-destructive"
-                          )}
-                        >
-                          {source.status}
-                        </span>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="size-9 shrink-0 cursor-pointer text-muted-foreground hover:text-destructive"
-                          onClick={() => removeSource(source.id)}
-                          aria-label={`Remove ${source.name}`}
-                        >
-                          <Trash2 className="size-4" />
-                        </Button>
-                      </div>
+                      <span
+                        className={cn(
+                          "inline-flex shrink-0 items-center rounded-full px-2.5 py-0.5 text-xs font-medium",
+                          ok ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400" : "bg-destructive/10 text-destructive"
+                        )}
+                      >
+                        {ok ? "Reachable" : "Error"}
+                      </span>
                     </CardHeader>
                   </Card>
                 );
@@ -168,7 +159,8 @@ export default function SourcesPage() {
               <CardHeader>
                 <CardTitle>Add data source</CardTitle>
                 <CardDescription>
-                  Connect a new data source (UI only – no backend connection yet).
+                  Multi-source management and OAuth-style connect flows are not implemented yet. Today,
+                  configure BigQuery or Postgres in the backend <code className="text-xs">.env</code>.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
@@ -176,31 +168,17 @@ export default function SourcesPage() {
                   <label htmlFor="source-name" className="text-sm font-medium">
                     Name
                   </label>
-                  <Input
-                    id="source-name"
-                    placeholder="e.g. Marketing Data"
-                    disabled
-                    className="opacity-60"
-                  />
+                  <Input id="source-name" placeholder="e.g. Marketing Data" disabled className="opacity-60" />
                 </div>
                 <div className="space-y-2">
                   <label htmlFor="source-type" className="text-sm font-medium">
                     Type
                   </label>
-                  <Input
-                    id="source-type"
-                    placeholder="BigQuery, CSV, PostgreSQL..."
-                    disabled
-                    className="opacity-60"
-                  />
+                  <Input id="source-type" placeholder="BigQuery, PostgreSQL…" disabled className="opacity-60" />
                 </div>
                 <div className="flex gap-2">
-                  <Button
-                    variant="outline"
-                    onClick={() => setShowAddForm(false)}
-                    className="cursor-pointer"
-                  >
-                    Cancel
+                  <Button variant="outline" onClick={() => setShowAddForm(false)} className="cursor-pointer">
+                    Close
                   </Button>
                   <Button disabled className="opacity-60 cursor-not-allowed">
                     Connect (coming soon)

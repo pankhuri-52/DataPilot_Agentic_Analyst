@@ -12,6 +12,10 @@ class AnalysisPlan(BaseModel):
     filters: dict[str, Any] = Field(default_factory=dict, description="Filters (e.g. date range, status)")
     is_valid: bool = Field(description="Whether the query is valid and analyzable")
     clarifying_questions: list[str] = Field(default_factory=list, description="Questions to ask if invalid")
+    query_scope: Optional[str] = Field(
+        default=None,
+        description="data_question | out_of_scope | needs_clarification — classify the user's message",
+    )
 
 
 class DataFeasibility(BaseModel):
@@ -46,7 +50,10 @@ class DataPilotState(TypedDict, total=False):
     data_feasibility: str  # "full" | "partial" | "none"
     nearest_plan: Optional[dict[str, Any]]  # AnalysisPlan as dict if partial
     missing_explanation: Optional[str]
-    sql: Optional[str]
+    tables_used: list[str]  # From Discovery; used for approval interrupt
+    sql: Optional[str]  # From Optimizer when user approves execution
+    bytes_scanned: Optional[int]  # BigQuery dry run estimate
+    estimated_cost: Optional[float]  # BigQuery cost estimate (USD)
     raw_results: Optional[list[dict[str, Any]]]
     validation_ok: bool
     chart_spec: Optional[dict[str, Any]]

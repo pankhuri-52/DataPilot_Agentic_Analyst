@@ -31,10 +31,10 @@ export default function ChatsPage() {
       <header className="shrink-0 border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
         <div className="mx-auto max-w-4xl px-6 py-6">
           <h1 className="font-display text-2xl font-semibold tracking-tight text-foreground">
-            Chat History
+            Chats
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            View and continue your previous conversations.
+            Open a chat to continue on the home screen.
           </p>
         </div>
       </header>

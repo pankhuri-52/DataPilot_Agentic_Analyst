@@ -8,6 +8,11 @@ from llm import get_gemini
 from agents.state import AnalysisPlan, TraceEntry
 from agents.schema_utils import load_schema, extract_data_ranges
 
+OUT_OF_SCOPE_MESSAGE = (
+    "I can only help with questions about the data you’ve connected—for example sales, revenue, "
+    "orders, products, customers, and metrics in your warehouse. Ask something about those datasets, "
+    "or rephrase your question to be about your business data."
+)
 
 PLANNER_PROMPT = """You are a data analytics planning agent. A business user has asked a question about their data.
 
@@ -28,6 +33,11 @@ Your job:
    - dimensions: what to group by (e.g. region, category, segment, product, date)
    - filters: any constraints (e.g. date range, status, region)
 4. If INVALID for other reasons (too vague, off-topic, unclear): set is_valid=false and provide clarifying_questions to help the user refine.
+
+5. Always set query_scope to exactly one of:
+   - "data_question": the message is about analyzing connected business / warehouse data.
+   - "out_of_scope": the message is not about that data (e.g. general knowledge, coding help, weather, chit-chat).
+   - "needs_clarification": the user might mean a data question but it is too vague to plan (set is_valid=false and add clarifying_questions).
 
 Rules:
 - Only analytics questions about business data (sales, orders, products, customers) are valid.
@@ -118,6 +128,12 @@ def run_planner(state: dict) -> dict:
         plan = structured_llm.invoke(prompt)
 
         plan_dict = plan.model_dump() if hasattr(plan, "model_dump") else plan
+        scope = (plan_dict.get("query_scope") or "").strip().lower()
+        if not plan_dict.get("is_valid") and scope == "out_of_scope":
+            plan_dict["clarifying_questions"] = [OUT_OF_SCOPE_MESSAGE]
+        elif not plan_dict.get("is_valid") and scope not in ("out_of_scope", "needs_clarification", "data_question"):
+            plan_dict["query_scope"] = "needs_clarification"
+
         if plan_dict.get("is_valid"):
             trace.append(
                 TraceEntry(

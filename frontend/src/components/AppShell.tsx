@@ -3,16 +3,26 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { MessageSquarePlus, MessageSquare, Database, LogIn, UserPlus, LogOut } from "lucide-react";
+import { MessageSquarePlus, MessageSquare, Database, LogIn, UserPlus, LogOut, X } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useChat } from "@/contexts/ChatContext";
 import { Button } from "@/components/ui/button";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+
+const SIDEBAR_CHATS_MAX = 12;
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const { user, loading, signOut } = useAuth();
-  const { startNewChat } = useChat();
+  const {
+    startNewChat,
+    conversations,
+    currentConversationId,
+    loadConversation,
+    conversationsError,
+    clearConversationsError,
+  } = useChat();
 
   const handleNewChat = () => {
     startNewChat();
@@ -41,18 +51,71 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <MessageSquarePlus className="size-5 shrink-0" aria-hidden />
             New chat
           </button>
-          <Link
-            href="/chats"
-            className={cn(
-              "flex min-h-[44px] min-w-[44px] cursor-pointer items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors duration-200 mt-2",
-              pathname === "/chats"
-                ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                : "text-muted-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
-            )}
-          >
-            <MessageSquare className="size-5 shrink-0" aria-hidden />
-            Chat History
-          </Link>
+          {user && conversationsError && (
+            <Alert variant="destructive" className="mt-2 py-2 px-3 text-xs">
+              <AlertTitle className="text-xs leading-tight">Chat sync</AlertTitle>
+              <AlertDescription className="text-[11px] leading-snug break-words">
+                {conversationsError}
+              </AlertDescription>
+              <button
+                type="button"
+                onClick={() => clearConversationsError()}
+                className="mt-1 flex items-center gap-1 text-[11px] underline opacity-90 hover:opacity-100"
+              >
+                <X className="size-3" aria-hidden />
+                Dismiss
+              </button>
+            </Alert>
+          )}
+
+          {user && (
+            <div className="mt-3 space-y-1 border-t border-sidebar-border pt-3">
+              <p className="px-3 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                Chats
+              </p>
+              <div className="max-h-48 space-y-0.5 overflow-y-auto pr-1 min-h-[2rem]">
+                {conversations.length === 0 ? (
+                  <p className="px-2.5 py-2 text-[11px] text-muted-foreground/80">No chats yet</p>
+                ) : (
+                  conversations.slice(0, SIDEBAR_CHATS_MAX).map((c) => {
+                    const selected = c.id === currentConversationId && pathname === "/";
+                    return (
+                      <button
+                        key={c.id}
+                        type="button"
+                        onClick={() => {
+                          if (c.id === currentConversationId && pathname === "/") return;
+                          loadConversation(c.id);
+                          if (pathname !== "/") router.push("/");
+                        }}
+                        className={cn(
+                          "flex w-full cursor-pointer items-center rounded-md px-2.5 py-2 text-left text-xs transition-colors",
+                          selected
+                            ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                            : "text-muted-foreground hover:bg-sidebar-accent/40 hover:text-sidebar-foreground"
+                        )}
+                        title={c.title || "Untitled"}
+                      >
+                        <span className="truncate">{c.title || "Untitled"}</span>
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+              <Link
+                href="/chats"
+                className={cn(
+                  "flex items-center gap-2 rounded-md px-2.5 py-2 text-[11px] font-medium transition-colors",
+                  pathname === "/chats"
+                    ? "text-sidebar-accent-foreground bg-sidebar-accent/50"
+                    : "text-muted-foreground hover:text-sidebar-foreground hover:bg-sidebar-accent/30"
+                )}
+              >
+                <MessageSquare className="size-3.5 shrink-0" aria-hidden />
+                View all
+              </Link>
+            </div>
+          )}
           <Link
             href="/sources"
             className={cn(

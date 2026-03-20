@@ -9,13 +9,17 @@ _CHAT_CLIENT = None
 
 
 def _get_supabase():
-    """Lazy-init Supabase client. Uses service role for backend bypass of RLS."""
+    """Lazy-init Supabase client. Service role only — server requests have no user JWT, so RLS blocks anon."""
     global _CHAT_CLIENT
     if _CHAT_CLIENT is None:
         url = os.getenv("SUPABASE_URL")
-        key = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_ANON_KEY") or os.getenv("SUPABASE_KEY")
+        key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
         if not url or not key:
-            raise ValueError("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_ANON_KEY) must be set")
+            raise ValueError(
+                "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set for chat. "
+                "The backend cannot list or save conversations without the service role key "
+                "(Project Settings → API in Supabase). The anon key is not sufficient for server-side REST."
+            )
         from supabase import create_client
         _CHAT_CLIENT = create_client(url, key)
     return _CHAT_CLIENT
@@ -37,6 +41,9 @@ def list_conversations(user_id: str) -> list[dict[str, Any]]:
 def create_conversation(user_id: str, title: str = "New conversation") -> dict[str, Any]:
     """Create a new conversation."""
     client = _get_supabase()
+    title = (title or "").strip() or "New conversation"
+    # postgrest-py 2.28+: insert() returns SyncQueryRequestBuilder (no .select()).
+    # Default returning=representation returns inserted row(s) in response.data.
     response = (
         client.table("conversations")
         .insert({"user_id": user_id, "title": title})

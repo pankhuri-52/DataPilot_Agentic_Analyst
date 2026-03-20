@@ -11,6 +11,7 @@ interface PlanCardProps {
     filters?: Record<string, unknown>;
     is_valid?: boolean;
     clarifying_questions?: string[];
+    query_scope?: string;
   };
 }
 
@@ -22,13 +23,33 @@ export function PlanCard({ plan }: PlanCardProps) {
     ([_, v]) => v !== undefined && v !== null && v !== ""
   );
 
+  const scope = (plan.query_scope || "").toLowerCase();
+  const isOutOfScope = scope === "out_of_scope";
+  const needsDetail = scope === "needs_clarification";
+
   if (plan.clarifying_questions && plan.clarifying_questions.length > 0) {
     return (
-      <Card className="border-amber-500/30 bg-amber-500/5">
+      <Card
+        className={
+          isOutOfScope
+            ? "border-slate-500/35 bg-slate-500/5"
+            : "border-amber-500/30 bg-amber-500/5"
+        }
+      >
         <CardHeader>
-          <CardTitle className="text-base">Clarifying questions</CardTitle>
+          <CardTitle className="text-base">
+            {isOutOfScope
+              ? "Outside your data"
+              : needsDetail
+                ? "Need a bit more detail"
+                : "Clarifying questions"}
+          </CardTitle>
           <CardDescription>
-            The agent needs more information to proceed.
+            {isOutOfScope
+              ? "This assistant only answers questions about your connected datasets."
+              : needsDetail
+                ? "Rephrase or add specifics so we can build an analysis plan."
+                : "The agent needs more information to proceed."}
           </CardDescription>
         </CardHeader>
         <CardContent>

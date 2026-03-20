@@ -76,6 +76,29 @@ def reset_password_for_email(email: str, redirect_to: str | None = None) -> None
     client.auth.reset_password_for_email(email, options)
 
 
+def refresh_session(refresh_token: str) -> dict[str, Any]:
+    """Refresh access token using Supabase refresh token."""
+    rt = (refresh_token or "").strip()
+    if not rt:
+        raise ValueError("refresh_token is required")
+    client = _get_supabase()
+    response = client.auth.refresh_session(rt)
+    session = response.session
+    user = response.user or (session.user if session else None)
+    if not session or not user:
+        raise ValueError("Invalid or expired refresh token")
+    user_data: dict[str, Any] = {"id": user.id, "email": user.email}
+    meta = getattr(user, "user_metadata", None) or getattr(user, "raw_user_meta_data", None) or {}
+    if meta and meta.get("full_name"):
+        user_data["name"] = meta["full_name"]
+    return {
+        "user": user_data,
+        "access_token": session.access_token,
+        "refresh_token": session.refresh_token,
+        "expires_at": session.expires_at,
+    }
+
+
 def get_user_from_token(access_token: str) -> dict[str, Any] | None:
     """Validate JWT and return user info. Returns None if invalid."""
     if not access_token:

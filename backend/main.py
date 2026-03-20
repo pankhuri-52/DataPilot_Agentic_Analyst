@@ -3,7 +3,9 @@ DataPilot backend – FastAPI app.
 Health check and CORS; Gemini test endpoint; agents in later steps.
 """
 import json
+import logging
 import os
+import uuid
 from fastapi import FastAPI, HTTPException, Body, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -17,6 +19,34 @@ if _env.exists():
     from dotenv import load_dotenv
     load_dotenv(_env)
 
+logger = logging.getLogger("datapilot")
+
+
+def _cors_allow_origins() -> list[str]:
+    """Explicit origins. Comma-separated CORS_ALLOW_ORIGINS overrides defaults."""
+    raw = os.getenv("CORS_ALLOW_ORIGINS", "").strip()
+    if raw:
+        return [o.strip() for o in raw.split(",") if o.strip()]
+    return [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:3001",
+        "http://127.0.0.1:3001",
+    ]
+
+
+def _cors_allow_origin_regex() -> str | None:
+    """
+    Preflight (OPTIONS) returns 400 if Origin is not allowed. Next.js often uses
+    3001+ when 3000 is busy; dev also uses 127.0.0.1 vs localhost. Match any port
+    on loopback only. Set CORS_ALLOW_ORIGIN_REGEX= to disable (production).
+    """
+    raw = os.getenv("CORS_ALLOW_ORIGIN_REGEX")
+    if raw is not None:
+        return raw.strip() or None
+    return r"https?://(localhost|127\.0\.0\.1)(:\d+)?$"
+
+
 app = FastAPI(
     title="DataPilot API",
     description="Autonomous multi-agent analytics – turn questions into validated insights.",
@@ -25,11 +55,20 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=_cors_allow_origins(),
+    allow_origin_regex=_cors_allow_origin_regex(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+def _log_chat_env_hint():
+    if not os.getenv("SUPABASE_SERVICE_ROLE_KEY"):
+        logger.warning(
+            "SUPABASE_SERVICE_ROLE_KEY is not set — chat list/save will fail until you add it (see README)."
+        )
 
 
 @app.get("/health")
@@ -137,7 +176,51 @@ def auth_me(user=Depends(get_current_user_optional)):
     return {"user": user}
 
 
+@app.post("/auth/refresh")
+def auth_refresh(body: dict = Body(default={"refresh_token": ""})):
+    """Exchange a Supabase refresh token for a new session (keeps users signed in after access JWT expires)."""
+    refresh_token = (body or {}).get("refresh_token", "").strip()
+    if not refresh_token:
+        raise HTTPException(status_code=400, detail="refresh_token is required")
+    try:
+        from auth import refresh_session
+        return refresh_session(refresh_token)
+    except ValueError as e:
+        if "must be set" in str(e).lower():
+            raise HTTPException(
+                status_code=503,
+                detail="Supabase not configured. Set SUPABASE_URL and SUPABASE_ANON_KEY in .env",
+            )
+        raise HTTPException(status_code=401, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Auth error: {str(e)}")
+
+
 # ---- Chat (conversations + messages) ----
+def _chat_error_detail(exc: BaseException) -> str:
+    """Turn Supabase/PostgREST errors into actionable messages for the UI."""
+    raw = str(exc)
+    low = raw.lower()
+    if "pgrst205" in low or ("schema cache" in low and "conversations" in low):
+        return (
+            "Chat tables are not in your Supabase project yet. In the Supabase dashboard: "
+            "SQL Editor → New query → paste the full file "
+            "backend/supabase_migrations/migrations/001_conversations.sql → Run. "
+            "Then reload the app. Details: backend/supabase_migrations/README.md"
+        )
+    if "messages" in low and "schema cache" in low:
+        return (
+            "Chat tables are not in your Supabase project yet. Run "
+            "backend/supabase_migrations/migrations/001_conversations.sql in the Supabase SQL Editor "
+            "(see backend/supabase_migrations/README.md)."
+        )
+    if "conversations" in low and ("relation" in low or "does not exist" in low):
+        return (
+            f"{raw} — Run backend/supabase_migrations/migrations/001_conversations.sql in the Supabase SQL Editor."
+        )
+    return raw
+
+
 def _require_user(authorization: str | None = Header(default=None)):
     """Dependency that requires authenticated user."""
     user = get_current_user_optional(authorization)
@@ -155,7 +238,8 @@ def list_conversations(user=Depends(_require_user)):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=503, detail=f"Chat error: {str(e)}")
+        logger.exception("list_conversations failed")
+        raise HTTPException(status_code=503, detail=_chat_error_detail(e))
 
 
 @app.post("/conversations")
@@ -172,7 +256,8 @@ def create_conversation(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=503, detail=f"Chat error: {str(e)}")
+        logger.exception("create_conversation failed")
+        raise HTTPException(status_code=503, detail=_chat_error_detail(e))
 
 
 @app.get("/conversations/{conversation_id}/messages")
@@ -182,7 +267,8 @@ def get_messages(conversation_id: str, user=Depends(_require_user)):
         from chat import list_messages as _list
         return {"messages": _list(conversation_id, user["id"])}
     except Exception as e:
-        raise HTTPException(status_code=503, detail=f"Chat error: {str(e)}")
+        logger.exception("get_messages failed")
+        raise HTTPException(status_code=503, detail=_chat_error_detail(e))
 
 
 def _resolve_credentials_path():
@@ -232,6 +318,57 @@ def get_schema():
         return json.load(f)
 
 
+@app.get("/data-sources/status")
+def data_sources_status():
+    """
+    Env-driven primary warehouse connector status (read-only).
+    Used by the UI to show real configuration vs mock data.
+    """
+    try:
+        from db.factory import get_connector
+    except ImportError:
+        return {"configured": False, "sources": [], "hint": "db.factory not available"}
+
+    conn = get_connector()
+    if conn is None:
+        return {
+            "configured": False,
+            "sources": [],
+            "hint": "Set BIGQUERY_PROJECT_ID and BIGQUERY_DATASET, or DATABASE_TYPE=postgres with POSTGRES_URL",
+        }
+
+    src: dict = {
+        "id": "primary",
+        "type": conn.dialect,
+        "healthy": False,
+        "label": "",
+        "detail": None,
+    }
+
+    if conn.dialect == "bigquery":
+        src["label"] = f"BigQuery · {conn.project_id} / {conn.dataset_id}"
+        try:
+            _resolve_credentials_path()
+            from google.cloud import bigquery
+
+            client = bigquery.Client(project=conn.project_id)
+            ds = f"{conn.project_id}.{conn.dataset_id}"
+            client.get_dataset(ds)
+            src["healthy"] = True
+        except Exception as e:
+            src["detail"] = str(e)
+    else:
+        schema_name = getattr(conn, "schema", "public")
+        src["label"] = f"PostgreSQL · {schema_name}"
+        try:
+            conn.execute("SELECT 1")
+            src["healthy"] = True
+        except Exception as e:
+            src["detail"] = str(e)
+
+    return {"configured": True, "sources": [src]}
+
+
 def _get_conversation_history(user_id: str, conversation_id: str | None) -> list[dict]:
     """Fetch recent messages from a conversation for conversational context. Returns list of {role, content, metadata}."""
     if not conversation_id or not user_id:
@@ -247,43 +384,138 @@ def _get_conversation_history(user_id: str, conversation_id: str | None) -> list
         return []
 
 
+_MAX_STORED_RESULT_ROWS = 200
+
+
+def _metadata_for_storage(response: dict) -> dict:
+    """Build assistant metadata; cap embedded results size for reliable JSONB storage."""
+    plan = response.get("plan") or {}
+    clarifying = plan.get("clarifying_questions") or []
+    results = response.get("results")
+    meta: dict = {
+        "plan": plan,
+        "data_feasibility": response.get("data_feasibility"),
+        "chart_spec": response.get("chart_spec"),
+        "sql": response.get("sql"),
+    }
+    if clarifying:
+        meta["clarifying_questions"] = clarifying
+    if isinstance(results, list):
+        if len(results) > _MAX_STORED_RESULT_ROWS:
+            meta["results"] = results[:_MAX_STORED_RESULT_ROWS]
+            meta["results_truncated"] = True
+        else:
+            meta["results"] = results
+    return meta
+
+
+def _save_user_turn_only(
+    user_id: str,
+    conversation_id: str | None,
+    query: str,
+) -> str | None:
+    """
+    Persist the user message for this turn: create conversation if needed, or append user row
+    when the thread exists but the latest stored user text for this turn is not yet saved
+    (e.g. client pre-created an empty conversation). Skip duplicate user row on second interrupt.
+    """
+    q = (query or "").strip()
+    if not q:
+        return conversation_id
+    try:
+        from chat import create_conversation, create_message, get_conversation, list_messages
+
+        if conversation_id:
+            conv = get_conversation(conversation_id, user_id)
+            if conv:
+                msgs = list_messages(conversation_id, user_id)
+                last = msgs[-1] if msgs else None
+                if (
+                    last
+                    and last.get("role") == "user"
+                    and (last.get("content") or "").strip() == q
+                ):
+                    return conversation_id
+                create_message(conversation_id, user_id, "user", q)
+                return conversation_id
+
+        title = q[:80] + ("..." if len(q) > 80 else "")
+        conv = create_conversation(user_id, title=title)
+        conv_id = conv["id"]
+        create_message(conv_id, user_id, "user", q)
+        return conv_id
+    except Exception:
+        return conversation_id
+
+
 def _save_ask_messages(
     user_id: str,
     conversation_id: str | None,
     query: str,
     response: dict,
+    *,
+    skip_user_message: bool = False,
 ) -> str | None:
-    """Save user message and assistant response. Create conversation if needed. Returns conversation_id."""
+    """
+    Save user + assistant messages, or assistant only after resume (user already persisted at interrupt).
+    Returns conversation_id.
+    """
     try:
         from chat import create_conversation, create_message, get_conversation
+
         conv_id = conversation_id
-        if not conv_id:
-            conv = create_conversation(user_id, title=query[:80] + ("..." if len(query) > 80 else ""))
-            conv_id = conv["id"]
-        else:
+        if skip_user_message:
+            if not conv_id:
+                return None
             conv = get_conversation(conv_id, user_id)
             if not conv:
                 return None
-        create_message(conv_id, user_id, "user", query)
+        else:
+            q = (query or "").strip()
+            if not conv_id:
+                title = (q[:80] + ("..." if len(q) > 80 else "")).strip() or "New conversation"
+                conv = create_conversation(user_id, title=title)
+                conv_id = conv["id"]
+            else:
+                conv = get_conversation(conv_id, user_id)
+                if not conv:
+                    return None
+            if q:
+                create_message(conv_id, user_id, "user", q)
+
         plan = response.get("plan") or {}
         clarifying = plan.get("clarifying_questions") or []
         explanation = response.get("explanation", "")
-        # When assistant asked clarifying questions (e.g. data range), use first as content for display
         if not explanation and clarifying:
             explanation = clarifying[0] if isinstance(clarifying[0], str) else "; ".join(clarifying)
-        metadata = {
-            "plan": plan,
-            "data_feasibility": response.get("data_feasibility"),
-            "results": response.get("results"),
-            "chart_spec": response.get("chart_spec"),
-            "sql": response.get("sql"),
-        }
+        metadata = _metadata_for_storage(response)
         if clarifying:
             metadata["clarifying_questions"] = clarifying
         create_message(conv_id, user_id, "assistant", explanation or "No response.", metadata=metadata)
         return conv_id
     except Exception:
         return conversation_id
+
+
+def _build_ask_response(state: dict) -> dict:
+    """Build response dict from graph state."""
+    return {
+        "plan": state.get("plan"),
+        "data_feasibility": state.get("data_feasibility"),
+        "nearest_plan": state.get("nearest_plan"),
+        "missing_explanation": state.get("missing_explanation"),
+        "tables_used": state.get("tables_used"),
+        "sql": state.get("sql"),
+        "bytes_scanned": state.get("bytes_scanned"),
+        "estimated_cost": state.get("estimated_cost"),
+        "results": state.get("raw_results"),
+        "validation_ok": state.get("validation_ok"),
+        "chart_spec": state.get("chart_spec"),
+        "explanation": state.get("explanation"),
+        "trace": state.get("trace", []),
+        "data_range": state.get("data_range"),
+        "empty_result_reason": state.get("empty_result_reason"),
+    }
 
 
 @app.post("/ask")
@@ -295,34 +527,69 @@ def ask(
     Submit a natural language question. Runs the multi-agent pipeline and returns
     plan, data_feasibility, results, chart_spec, explanation, and trace.
     Optionally pass conversation_id and Authorization to persist chat.
+    Uses thread_id for interrupt/resume; returns thread_id when interrupted.
     """
     query = (body or {}).get("query", "").strip()
     conversation_id = (body or {}).get("conversation_id")
+    thread_id = (body or {}).get("thread_id") or str(uuid.uuid4())
     if not query:
         raise HTTPException(status_code=400, detail="query is required")
 
     history = _get_conversation_history(user["id"] if user else "", conversation_id) if user else []
 
     try:
+        from langgraph.types import Command
         from agents.graph import get_graph
-        graph = get_graph()
-        initial_state = {"query": query, "trace": [], "conversation_history": history}
-        final_state = graph.invoke(initial_state)
 
-        response = {
-            "plan": final_state.get("plan"),
-            "data_feasibility": final_state.get("data_feasibility"),
-            "nearest_plan": final_state.get("nearest_plan"),
-            "missing_explanation": final_state.get("missing_explanation"),
-            "sql": final_state.get("sql"),
-            "results": final_state.get("raw_results"),
-            "validation_ok": final_state.get("validation_ok"),
-            "chart_spec": final_state.get("chart_spec"),
-            "explanation": final_state.get("explanation"),
-            "trace": final_state.get("trace", []),
-            "data_range": final_state.get("data_range"),
-            "empty_result_reason": final_state.get("empty_result_reason"),
-        }
+        graph = get_graph()
+        config = {"configurable": {"thread_id": thread_id}}
+        initial_state = {"query": query, "trace": [], "conversation_history": history}
+
+        try:
+            result = graph.invoke(initial_state, config=config)
+        except Exception as inv_err:
+            # LangGraph may raise on interrupt; check for interrupt in exception
+            err_str = str(inv_err)
+            if "interrupt" in err_str.lower() or "GraphInterrupt" in err_str:
+                state_snapshot = graph.get_state(config)
+                state = state_snapshot.values if hasattr(state_snapshot, "values") else {}
+                out = {
+                    "thread_id": thread_id,
+                    "interrupt": {"reason": "unknown", "data": {}},
+                    "trace": state.get("trace", []),
+                    "plan": state.get("plan"),
+                    "data_feasibility": state.get("data_feasibility"),
+                    "tables_used": state.get("tables_used"),
+                }
+                if user and query:
+                    cid = _save_user_turn_only(user["id"], conversation_id, query)
+                    if cid:
+                        out["conversation_id"] = cid
+                return out
+            raise inv_err
+
+        # Check for interrupt (LangGraph may return state with __interrupt__)
+        interrupt_data = result.get("__interrupt__") if isinstance(result, dict) else None
+        if interrupt_data:
+            # Extract interrupt payload (may be list of Interrupt objects)
+            payload = interrupt_data[0].value if hasattr(interrupt_data[0], "value") else interrupt_data[0]
+            if isinstance(payload, dict):
+                out = {
+                    "thread_id": thread_id,
+                    "interrupt": payload,
+                    "trace": result.get("trace", []),
+                    "plan": result.get("plan"),
+                    "data_feasibility": result.get("data_feasibility"),
+                    "tables_used": result.get("tables_used"),
+                }
+                if user and query:
+                    cid = _save_user_turn_only(user["id"], conversation_id, query)
+                    if cid:
+                        out["conversation_id"] = cid
+                return out
+
+        response = _build_ask_response(result)
+        response["thread_id"] = thread_id
 
         if user:
             saved_conv_id = _save_ask_messages(user["id"], conversation_id, query, response)
@@ -344,47 +611,105 @@ def ask(
         raise HTTPException(status_code=503, detail=err_msg)
 
 
-async def _ask_stream_generator(query: str, user: dict | None, conversation_id: str | None, conversation_history: list[dict] | None = None):
-    """Async generator that yields SSE events for real-time agent progress."""
+async def _ask_stream_generator(
+    query: str,
+    user: dict | None,
+    conversation_id: str | None,
+    thread_id: str,
+    conversation_history: list[dict] | None = None,
+    resume: bool | None = None,
+    persist_query: str | None = None,
+):
+    """Async generator that yields SSE events for real-time agent progress. Handles interrupts."""
     try:
+        from langgraph.types import Command
         from agents.graph import get_graph
 
         graph = get_graph()
+        config = {"configurable": {"thread_id": thread_id}}
         history = conversation_history or []
-        initial_state = {"query": query, "trace": [], "conversation_history": history}
         prev_trace_len = 0
         last_state = None
 
-        async for chunk in graph.astream(initial_state, stream_mode="values"):
+        if resume is not None:
+            input_data = Command(resume=resume)
+        else:
+            input_data = {"query": query, "trace": [], "conversation_history": history}
+
+        async for chunk in graph.astream(input_data, config=config, stream_mode="values"):
+            # Check for interrupt (chunk may be dict with __interrupt__)
+            interrupt_data = chunk.get("__interrupt__") if isinstance(chunk, dict) else None
+            if interrupt_data:
+                first = interrupt_data[0] if interrupt_data else None
+                payload = first.value if first and hasattr(first, "value") else (first or {})
+                if not isinstance(payload, dict):
+                    payload = {}
+                # Use last_state for trace/plan (chunk with interrupt may not have full state)
+                state = last_state if last_state is not None else {}
+                # Tables may be in payload (approve_tables) or state
+                tables_used = state.get("tables_used") or payload.get("tables", [])
+                interrupt_event = {
+                    "type": "interrupt",
+                    "thread_id": thread_id,
+                    "data": payload,
+                    "trace": state.get("trace", []),
+                    "plan": state.get("plan"),
+                    "data_feasibility": state.get("data_feasibility"),
+                    "tables_used": tables_used,
+                    "sql": state.get("sql"),
+                    "bytes_scanned": state.get("bytes_scanned"),
+                    "estimated_cost": state.get("estimated_cost"),
+                }
+                if user and resume is None and (query or "").strip():
+                    persisted = _save_user_turn_only(user["id"], conversation_id, query)
+                    if persisted:
+                        interrupt_event["conversation_id"] = persisted
+                yield f"data: {json.dumps(interrupt_event)}\n\n"
+                return
+
             last_state = chunk
-            trace = chunk.get("trace") or []
+            trace = (chunk.get("trace") or []) if isinstance(chunk, dict) else []
             for i in range(prev_trace_len, len(trace)):
                 entry = trace[i]
-                event = {
-                    "type": "progress",
-                    "agent": entry.get("agent", ""),
-                    "trace_entry": entry,
-                }
+                event = {"type": "progress", "agent": entry.get("agent", ""), "trace_entry": entry}
                 yield f"data: {json.dumps(event)}\n\n"
             prev_trace_len = len(trace)
 
         if last_state is not None:
-            response = {
-                "plan": last_state.get("plan"),
-                "data_feasibility": last_state.get("data_feasibility"),
-                "nearest_plan": last_state.get("nearest_plan"),
-                "missing_explanation": last_state.get("missing_explanation"),
-                "sql": last_state.get("sql"),
-                "results": last_state.get("raw_results"),
-                "validation_ok": last_state.get("validation_ok"),
-                "chart_spec": last_state.get("chart_spec"),
-                "explanation": last_state.get("explanation"),
-                "trace": last_state.get("trace", []),
-                "data_range": last_state.get("data_range"),
-                "empty_result_reason": last_state.get("empty_result_reason"),
-            }
+            response = _build_ask_response(last_state)
+            response["thread_id"] = thread_id
             if user:
-                saved_conv_id = _save_ask_messages(user["id"], conversation_id, query, response)
+                eff_conv = conversation_id
+                if resume is not None:
+                    q_orig = (persist_query or "").strip()
+                    if not eff_conv and q_orig:
+                        eff_conv = _save_user_turn_only(user["id"], None, q_orig)
+                    if eff_conv:
+                        saved_conv_id = _save_ask_messages(
+                            user["id"],
+                            eff_conv,
+                            query,
+                            response,
+                            skip_user_message=True,
+                        )
+                    elif q_orig:
+                        saved_conv_id = _save_ask_messages(
+                            user["id"],
+                            None,
+                            q_orig,
+                            response,
+                            skip_user_message=False,
+                        )
+                    else:
+                        saved_conv_id = None
+                else:
+                    saved_conv_id = _save_ask_messages(
+                        user["id"],
+                        eff_conv,
+                        (query or "").strip(),
+                        response,
+                        skip_user_message=False,
+                    )
                 if saved_conv_id:
                     response["conversation_id"] = saved_conv_id
             yield f"data: {json.dumps({'type': 'complete', 'response': response})}\n\n"
@@ -408,11 +733,12 @@ async def ask_stream(
     """
     Submit a natural language question. Streams real-time agent progress via SSE,
     then returns the full response in the final event.
-    Optionally pass conversation_id and Authorization to persist chat.
-    Uses conversation history for conversational context (e.g. user says "Sure" to proceed with available range).
+    When an interrupt occurs (table approval, execute confirmation), returns type: "interrupt" with thread_id.
+    Use POST /ask/continue with that thread_id to resume.
     """
     query = (body or {}).get("query", "").strip()
     conversation_id = (body or {}).get("conversation_id")
+    thread_id = (body or {}).get("thread_id") or str(uuid.uuid4())
     if not query:
         raise HTTPException(status_code=400, detail="query is required")
 
@@ -420,7 +746,47 @@ async def ask_stream(
 
     try:
         return StreamingResponse(
-            _ask_stream_generator(query, user, conversation_id, conversation_history=history),
+            _ask_stream_generator(query, user, conversation_id, thread_id, conversation_history=history),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Agent error: {str(e)}")
+
+
+@app.post("/ask/continue")
+async def ask_continue(
+    body: dict = Body(default={"thread_id": ""}),
+    user=Depends(get_current_user_optional),
+):
+    """
+    Resume graph execution after an interrupt (table approval or execute confirmation).
+    Pass thread_id from the interrupt event. Streams from the resume point.
+    """
+    thread_id = (body or {}).get("thread_id", "").strip()
+    conversation_id = (body or {}).get("conversation_id")
+    approved = (body or {}).get("approved", True)
+    original_query = (body or {}).get("original_query", "").strip()
+    if not thread_id:
+        raise HTTPException(status_code=400, detail="thread_id is required")
+
+    history = _get_conversation_history(user["id"] if user else "", conversation_id) if user else []
+
+    try:
+        return StreamingResponse(
+            _ask_stream_generator(
+                "",
+                user,
+                conversation_id,
+                thread_id,
+                conversation_history=history,
+                resume=approved,
+                persist_query=original_query or None,
+            ),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
