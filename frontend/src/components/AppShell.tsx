@@ -14,6 +14,7 @@ import {
   X,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   AlertCircle,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
@@ -23,11 +24,13 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
 const SIDEBAR_CHATS_MAX = 12;
 const SIDEBAR_STORAGE_KEY = "datapilot_sidebar_collapsed";
+const CHATS_SECTION_STORAGE_KEY = "datapilot_sidebar_chats_expanded";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [chatsExpanded, setChatsExpanded] = useState(false);
 
   useEffect(() => {
     try {
@@ -38,11 +41,32 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  useEffect(() => {
+    try {
+      const v = localStorage.getItem(CHATS_SECTION_STORAGE_KEY);
+      if (v === "1") setChatsExpanded(true);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
   const toggleSidebar = useCallback(() => {
     setSidebarCollapsed((c) => {
       const next = !c;
       try {
         localStorage.setItem(SIDEBAR_STORAGE_KEY, next ? "1" : "0");
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  }, []);
+
+  const toggleChatsSection = useCallback(() => {
+    setChatsExpanded((e) => {
+      const next = !e;
+      try {
+        localStorage.setItem(CHATS_SECTION_STORAGE_KEY, next ? "1" : "0");
       } catch {
         /* ignore */
       }
@@ -153,50 +177,63 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
           {user && !sidebarCollapsed && (
             <div className="mt-3 space-y-1 border-t border-sidebar-border pt-3">
-              <p className="px-3 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                Chats
-              </p>
-              <div className="max-h-48 space-y-0.5 overflow-y-auto pr-1 min-h-[2rem]">
-                {conversations.length === 0 ? (
+              {conversations.length === 0 ? (
+                <>
+                  <p className="px-3 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                    Chats
+                  </p>
                   <p className="px-2.5 py-2 text-[11px] text-muted-foreground/80">No chats yet</p>
-                ) : (
-                  conversations.slice(0, SIDEBAR_CHATS_MAX).map((c) => {
-                    const selected = c.id === currentConversationId && pathname === "/";
-                    return (
-                      <button
-                        key={c.id}
-                        type="button"
-                        onClick={() => {
-                          if (c.id === currentConversationId && pathname === "/") return;
-                          loadConversation(c.id);
-                          if (pathname !== "/") router.push("/");
-                        }}
-                        className={cn(
-                          "flex w-full cursor-pointer items-center rounded-md px-2.5 py-2 text-left text-xs transition-colors",
-                          selected
-                            ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                            : "text-muted-foreground hover:bg-sidebar-accent/40 hover:text-sidebar-foreground"
-                        )}
-                        title={c.title || "Untitled"}
-                      >
-                        <span className="truncate">{c.title || "Untitled"}</span>
-                      </button>
-                    );
-                  })
-                )}
-              </div>
-              <Link
-                href="/chats"
-                className={cn(
-                  "flex items-center gap-2 rounded-md px-2.5 py-2 text-[11px] font-medium transition-colors",
-                  pathname === "/chats"
-                    ? "text-sidebar-accent-foreground bg-sidebar-accent/50"
-                    : "text-muted-foreground hover:text-sidebar-foreground hover:bg-sidebar-accent/30"
-                )}
-              >
-                <MessageSquare className="size-3.5 shrink-0" aria-hidden />
-                View all
-              </Link>
+                </>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    onClick={toggleChatsSection}
+                    aria-expanded={chatsExpanded}
+                    aria-controls="sidebar-chats-list"
+                    className="flex w-full cursor-pointer items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-[10px] font-medium uppercase tracking-wider text-muted-foreground transition-colors hover:bg-sidebar-accent/30 hover:text-sidebar-foreground"
+                  >
+                    <span className="truncate">Chats</span>
+                    <ChevronDown
+                      className={cn(
+                        "size-3.5 shrink-0 transition-transform duration-200",
+                        !chatsExpanded && "-rotate-90"
+                      )}
+                      aria-hidden
+                    />
+                  </button>
+                  {chatsExpanded && (
+                    <div
+                      id="sidebar-chats-list"
+                      className="max-h-48 space-y-0.5 overflow-y-auto pr-1 min-h-[2rem]"
+                    >
+                      {conversations.slice(0, SIDEBAR_CHATS_MAX).map((c) => {
+                        const selected = c.id === currentConversationId && pathname === "/";
+                        return (
+                          <button
+                            key={c.id}
+                            type="button"
+                            onClick={() => {
+                              if (c.id === currentConversationId && pathname === "/") return;
+                              loadConversation(c.id);
+                              if (pathname !== "/") router.push("/");
+                            }}
+                            className={cn(
+                              "flex w-full cursor-pointer items-center rounded-md px-2.5 py-2 text-left text-xs transition-colors",
+                              selected
+                                ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                                : "text-muted-foreground hover:bg-sidebar-accent/40 hover:text-sidebar-foreground"
+                            )}
+                            title={c.title || "Untitled"}
+                          >
+                            <span className="truncate">{c.title || "Untitled"}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </>
+              )}
             </div>
           )}
           {user && sidebarCollapsed && (
