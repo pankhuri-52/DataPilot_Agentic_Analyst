@@ -1,0 +1,11 @@
+{
+  "name": "datapilot",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently -n \"web,api\" -c \"cyan,magenta\" \"npm run dev --prefix frontend\" \"npm run dev:api\"",
+    "dev:api": "cd backend && py -3.12 -m uvicorn main:app --reload || python -m uvicorn main:app --reload"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}

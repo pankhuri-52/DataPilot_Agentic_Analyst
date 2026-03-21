@@ -2,18 +2,54 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
+import { useCallback, useEffect, useState, type CSSProperties } from "react";
 import { cn } from "@/lib/utils";
-import { MessageSquarePlus, MessageSquare, Database, LogIn, UserPlus, LogOut, X } from "lucide-react";
+import {
+  MessageSquarePlus,
+  MessageSquare,
+  Database,
+  LogIn,
+  UserPlus,
+  LogOut,
+  X,
+  ChevronLeft,
+  ChevronRight,
+  AlertCircle,
+} from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useChat } from "@/contexts/ChatContext";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
 const SIDEBAR_CHATS_MAX = 12;
+const SIDEBAR_STORAGE_KEY = "datapilot_sidebar_collapsed";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+
+  useEffect(() => {
+    try {
+      const v = localStorage.getItem(SIDEBAR_STORAGE_KEY);
+      if (v === "1") setSidebarCollapsed(true);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const toggleSidebar = useCallback(() => {
+    setSidebarCollapsed((c) => {
+      const next = !c;
+      try {
+        localStorage.setItem(SIDEBAR_STORAGE_KEY, next ? "1" : "0");
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  }, []);
+
   const { user, loading, signOut } = useAuth();
   const {
     startNewChat,
@@ -29,29 +65,65 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     if (pathname !== "/") router.push("/");
   };
 
+  const sidebarWidth = sidebarCollapsed ? "3.5rem" : "14rem";
+
   return (
-    <div className="flex min-h-screen">
-      <aside className="fixed left-0 top-0 z-30 flex h-full w-56 flex-col border-r border-border bg-sidebar/95 backdrop-blur supports-[backdrop-filter]:bg-sidebar/80">
-        <div className="flex h-16 items-center gap-2 border-b border-sidebar-border px-6">
-          <span className="font-display text-xl font-semibold tracking-tight text-foreground">
-            DataPilot
-          </span>
+    <div
+      className="flex min-h-screen"
+      style={
+        {
+          ["--sidebar-width" as string]: sidebarWidth,
+        } as CSSProperties
+      }
+    >
+      <aside
+        className={cn(
+          "fixed left-0 top-0 z-30 flex h-full w-[var(--sidebar-width)] flex-col border-r border-border bg-sidebar/95 backdrop-blur transition-[width] duration-200 ease-out supports-[backdrop-filter]:bg-sidebar/80 overflow-hidden"
+        )}
+      >
+        <div
+          className={cn(
+            "flex h-16 shrink-0 items-center gap-2 border-b border-sidebar-border",
+            sidebarCollapsed ? "justify-center px-2" : "px-4"
+          )}
+        >
+          {!sidebarCollapsed && (
+            <span className="min-w-0 flex-1 truncate font-display text-lg font-semibold tracking-tight text-foreground">
+              DataPilot
+            </span>
+          )}
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            onClick={toggleSidebar}
+            className="size-9 shrink-0 cursor-pointer text-muted-foreground hover:text-foreground"
+            aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+          >
+            {sidebarCollapsed ? (
+              <ChevronRight className="size-5" aria-hidden />
+            ) : (
+              <ChevronLeft className="size-5" aria-hidden />
+            )}
+          </Button>
         </div>
-        <nav className="flex flex-1 flex-col gap-1 p-4 overflow-y-auto">
+        <nav className="flex flex-1 flex-col gap-1 overflow-y-auto overflow-x-hidden p-2">
           <button
             type="button"
             onClick={handleNewChat}
+            title="New chat"
             className={cn(
-              "flex min-h-[44px] min-w-[44px] cursor-pointer items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors duration-200 w-full",
+              "flex min-h-[44px] cursor-pointer items-center gap-3 rounded-lg py-2.5 text-sm font-medium transition-colors duration-200 w-full",
+              sidebarCollapsed ? "justify-center px-0" : "px-3",
               pathname === "/"
                 ? "bg-sidebar-accent text-sidebar-accent-foreground"
                 : "text-muted-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
             )}
           >
             <MessageSquarePlus className="size-5 shrink-0" aria-hidden />
-            New chat
+            {!sidebarCollapsed && <span>New chat</span>}
           </button>
-          {user && conversationsError && (
+          {user && conversationsError && !sidebarCollapsed && (
             <Alert variant="destructive" className="mt-2 py-2 px-3 text-xs">
               <AlertTitle className="text-xs leading-tight">Chat sync</AlertTitle>
               <AlertDescription className="text-[11px] leading-snug break-words">
@@ -67,8 +139,19 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               </button>
             </Alert>
           )}
+          {user && conversationsError && sidebarCollapsed && (
+            <button
+              type="button"
+              title={`Chat sync: ${conversationsError}`}
+              onClick={() => clearConversationsError()}
+              className="mx-auto flex size-9 shrink-0 cursor-pointer items-center justify-center rounded-lg text-destructive hover:bg-destructive/10"
+              aria-label="Chat sync error; dismiss"
+            >
+              <AlertCircle className="size-5" aria-hidden />
+            </button>
+          )}
 
-          {user && (
+          {user && !sidebarCollapsed && (
             <div className="mt-3 space-y-1 border-t border-sidebar-border pt-3">
               <p className="px-3 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
                 Chats
@@ -116,52 +199,89 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               </Link>
             </div>
           )}
+          {user && sidebarCollapsed && (
+            <div className="mt-2 flex flex-col items-center border-t border-sidebar-border pt-2">
+              <Link
+                href="/chats"
+                title="All chats"
+                className={cn(
+                  "flex size-10 cursor-pointer items-center justify-center rounded-lg transition-colors",
+                  pathname === "/chats"
+                    ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                    : "text-muted-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
+                )}
+              >
+                <MessageSquare className="size-5 shrink-0" aria-hidden />
+              </Link>
+            </div>
+          )}
           <Link
             href="/sources"
+            title="Data Sources"
             className={cn(
-              "flex min-h-[44px] min-w-[44px] cursor-pointer items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors duration-200 mt-2",
+              "flex min-h-[44px] cursor-pointer items-center gap-3 rounded-lg py-2.5 text-sm font-medium transition-colors duration-200 mt-2",
+              sidebarCollapsed ? "justify-center px-0" : "px-3",
               pathname === "/sources"
                 ? "bg-sidebar-accent text-sidebar-accent-foreground"
                 : "text-muted-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
             )}
           >
             <Database className="size-5 shrink-0" aria-hidden />
-            Data Sources
+            {!sidebarCollapsed && <span>Data Sources</span>}
           </Link>
         </nav>
-        <div className="border-t border-sidebar-border p-4 space-y-2 shrink-0">
+        <div
+          className={cn(
+            "border-t border-sidebar-border shrink-0 space-y-2",
+            sidebarCollapsed ? "p-2 flex flex-col items-center" : "p-4"
+          )}
+        >
           {!loading && (
             <>
               {user ? (
-                <div className="space-y-2">
-                  <p className="truncate text-xs text-muted-foreground" title={user.email}>
-                    {user.name || user.email}
-                  </p>
+                <div className={cn("space-y-2", sidebarCollapsed && "flex flex-col items-center")}>
+                  {!sidebarCollapsed && (
+                    <p className="truncate text-xs text-muted-foreground" title={user.email}>
+                      {user.name || user.email}
+                    </p>
+                  )}
                   <Button
                     variant="ghost"
-                    size="sm"
-                    className="w-full justify-start cursor-pointer"
+                    size={sidebarCollapsed ? "icon" : "sm"}
+                    className={cn(
+                      "cursor-pointer",
+                      sidebarCollapsed ? "size-9" : "w-full justify-start"
+                    )}
+                    title="Sign out"
                     onClick={() => signOut()}
                   >
-                    <LogOut className="size-4 mr-2" />
-                    Sign out
+                    <LogOut className={cn("size-4", !sidebarCollapsed && "mr-2")} />
+                    {!sidebarCollapsed && "Sign out"}
                   </Button>
                 </div>
               ) : (
-                <div className="flex flex-col gap-2">
+                <div className={cn("flex flex-col gap-2", sidebarCollapsed && "items-center")}>
                   <Link
                     href="/login"
-                    className="inline-flex h-7 w-full cursor-pointer items-center justify-center gap-1.5 rounded-lg border border-border bg-background px-2.5 text-sm font-medium transition-colors hover:bg-muted hover:text-foreground"
+                    title="Sign in"
+                    className={cn(
+                      "inline-flex cursor-pointer items-center justify-center rounded-lg border border-border bg-background text-sm font-medium transition-colors hover:bg-muted hover:text-foreground",
+                      sidebarCollapsed ? "size-10" : "h-7 w-full gap-1.5 px-2.5"
+                    )}
                   >
                     <LogIn className="size-3.5" />
-                    Sign in
+                    {!sidebarCollapsed && "Sign in"}
                   </Link>
                   <Link
                     href="/signup"
-                    className="inline-flex h-7 w-full cursor-pointer items-center justify-center gap-1.5 rounded-lg px-2.5 text-sm font-medium transition-colors hover:bg-muted hover:text-foreground"
+                    title="Sign up"
+                    className={cn(
+                      "inline-flex cursor-pointer items-center justify-center rounded-lg text-sm font-medium transition-colors hover:bg-muted hover:text-foreground",
+                      sidebarCollapsed ? "size-10" : "h-7 w-full gap-1.5 px-2.5"
+                    )}
                   >
                     <UserPlus className="size-3.5" />
-                    Sign up
+                    {!sidebarCollapsed && "Sign up"}
                   </Link>
                 </div>
               )}
@@ -169,7 +289,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           )}
         </div>
       </aside>
-      <main className="flex-1 pl-56">{children}</main>
+      <main className="flex-1 pl-[var(--sidebar-width)] transition-[padding-left] duration-200 ease-out">
+        {children}
+      </main>
     </div>
   );
 }

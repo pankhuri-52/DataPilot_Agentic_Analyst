@@ -4,9 +4,27 @@ Checks data availability early: if the user asks for a time period outside the d
 stops and asks if they want to proceed with the available range instead.
 """
 import json
-from llm import get_gemini
+from llm import get_gemini, invoke_with_retry
 from agents.state import AnalysisPlan, TraceEntry
 from agents.schema_utils import load_schema, extract_data_ranges
+
+EXECUTION_PHASE_ORDER = (
+    "planner",
+    "discovery",
+    "optimizer",
+    "executor",
+    "validator",
+    "visualization",
+)
+
+DEFAULT_STEP_LABELS: dict[str, str] = {
+    "planner": "Plan the analysis",
+    "discovery": "Check data availability",
+    "optimizer": "Build SQL and review cost",
+    "executor": "Execute the query",
+    "validator": "Validate results",
+    "visualization": "Visualize and explain",
+}
 
 OUT_OF_SCOPE_MESSAGE = (
     "I can only help with questions about the data you’ve connected—for example sales, revenue, "
@@ -49,7 +67,99 @@ Rules:
 CONVERSATIONAL CONTEXT (when conversation history is provided):
 - If the user's current message is a brief affirmation (e.g. "Sure", "Yes", "Okay", "Yes please", "Go ahead", "That works") AND the previous assistant message contained a clarifying question offering to answer for the available data range, treat the user as agreeing.
 - In that case: produce a VALID plan that answers the ORIGINAL user question (from the history) but with filters set to the available date range (start_date and end_date from DATA AVAILABILITY). Set is_valid=true and include the appropriate filters.
+
+6. When is_valid=true: include execution_steps — exactly 6 objects in this pipeline order (same order every time).
+   Each phase value must be exactly one of: planner, discovery, optimizer, executor, validator, visualization.
+   UI CONSTRAINTS (important — users scan a checklist, not an essay):
+   - title: short label only, max ~10 words, Title Case or sentence case, no trailing period. Example: "Map plan to warehouse tables" not a long sentence.
+   - detail: at most 2 short sentences OR ~220 characters total. State the one concrete thing this step does for THIS question; avoid generic data-warehouse lectures, repeated wording across steps, and bullet lists.
+   Phases (what to write):
+   (1) planner — title names the analysis goal; detail: metrics, dimensions, filters in one tight line if not already obvious from the title.
+   (2) discovery — title + detail: which entities/tables/time range you will align to (one line).
+   (3) optimizer — title + detail: draft SQL + cost check (half line).
+   (4) executor — title + detail: run query (half line).
+   (5) validator — title + detail: quick sanity check (half line).
+   (6) visualization — title + detail: chart type + takeaway (half line).
+When is_valid=false: set execution_steps to [].
 """
+
+
+def _default_planner_detail(plan_dict: dict) -> str:
+    parts: list[str] = []
+    metrics = plan_dict.get("metrics") or []
+    dimensions = plan_dict.get("dimensions") or []
+    filters = plan_dict.get("filters") or {}
+    if metrics:
+        parts.append("Metrics: " + ", ".join(str(x) for x in metrics))
+    if dimensions:
+        parts.append("Dimensions: " + ", ".join(str(x) for x in dimensions))
+    if isinstance(filters, dict) and filters:
+        fe = [f"{k}: {v}" for k, v in filters.items() if v not in (None, "")]
+        if fe:
+            parts.append("Filters: " + "; ".join(fe))
+    return "\n".join(parts) if parts else "Define what to analyze from your question."
+
+
+def _clip_ui_text(s: str | None, max_len: int) -> str | None:
+    if not s:
+        return None
+    t = s.strip()
+    if len(t) <= max_len:
+        return t
+    return t[: max_len - 1].rstrip() + "\u2026"
+
+
+def _normalize_execution_steps(plan_dict: dict) -> None:
+    """Ensure valid plans have 6 well-formed steps for the UI; invalid plans have no steps."""
+    if not plan_dict.get("is_valid"):
+        plan_dict["execution_steps"] = []
+        return
+
+    raw = plan_dict.get("execution_steps") or []
+    normalized: list[dict] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        phase = (item.get("phase") or "").strip()
+        title = (item.get("title") or "").strip()
+        detail = item.get("detail")
+        if isinstance(detail, str):
+            detail = detail.strip() or None
+        elif detail is not None:
+            detail = str(detail).strip() or None
+        else:
+            detail = None
+        if phase in EXECUTION_PHASE_ORDER:
+            if not title:
+                title = DEFAULT_STEP_LABELS.get(phase, phase)
+            normalized.append({"phase": phase, "title": title, "detail": detail})
+
+    phases_got = [s["phase"] for s in normalized]
+    valid = len(normalized) == 6 and phases_got == list(EXECUTION_PHASE_ORDER)
+    if not valid:
+        normalized = [
+            {
+                "phase": p,
+                "title": DEFAULT_STEP_LABELS[p],
+                "detail": _default_planner_detail(plan_dict) if p == "planner" else None,
+            }
+            for p in EXECUTION_PHASE_ORDER
+        ]
+    elif not normalized[0].get("detail"):
+        normalized[0]["detail"] = _default_planner_detail(plan_dict)
+
+    for step in normalized:
+        ph = step.get("phase", "")
+        t = _clip_ui_text(step.get("title"), 120)
+        if t:
+            step["title"] = t
+        else:
+            step["title"] = DEFAULT_STEP_LABELS.get(ph, str(ph))
+        d = step.get("detail")
+        if d:
+            step["detail"] = _clip_ui_text(d, 300)
+
+    plan_dict["execution_steps"] = normalized
 
 
 def _build_conversation_history_section(history: list[dict]) -> str:
@@ -92,6 +202,7 @@ def run_planner(state: dict) -> dict:
                 filters={},
                 is_valid=False,
                 clarifying_questions=["Please enter a question about your data (e.g. sales, revenue, orders)."],
+                execution_steps=[],
             ).model_dump(),
             "trace": trace,
         }
@@ -125,7 +236,7 @@ def run_planner(state: dict) -> dict:
             CONVERSATION_HISTORY_SECTION=history_section or "",
             DATA_AVAILABILITY_SECTION=data_section or "No date-range metadata available; skip time-range validation.",
         )
-        plan = structured_llm.invoke(prompt)
+        plan = invoke_with_retry(structured_llm, prompt)
 
         plan_dict = plan.model_dump() if hasattr(plan, "model_dump") else plan
         scope = (plan_dict.get("query_scope") or "").strip().lower()
@@ -134,13 +245,21 @@ def run_planner(state: dict) -> dict:
         elif not plan_dict.get("is_valid") and scope not in ("out_of_scope", "needs_clarification", "data_question"):
             plan_dict["query_scope"] = "needs_clarification"
 
+        _normalize_execution_steps(plan_dict)
+
         if plan_dict.get("is_valid"):
             trace.append(
                 TraceEntry(
                     agent="planner",
                     status="success",
                     message="Plan created – query is valid and within data range",
-                    output={"is_valid": True, "metrics": plan_dict.get("metrics", []), "dimensions": plan_dict.get("dimensions", []), "filters": plan_dict.get("filters", {})},
+                    output={
+                        "is_valid": True,
+                        "metrics": plan_dict.get("metrics", []),
+                        "dimensions": plan_dict.get("dimensions", []),
+                        "filters": plan_dict.get("filters", {}),
+                        "execution_steps": plan_dict.get("execution_steps", []),
+                    },
                 ).model_dump()
             )
         else:
@@ -163,6 +282,7 @@ def run_planner(state: dict) -> dict:
                 filters={},
                 is_valid=False,
                 clarifying_questions=[f"Sorry, I couldn't process that. Please try rephrasing. Error: {e}"],
+                execution_steps=[],
             ).model_dump(),
             "trace": trace,
         }

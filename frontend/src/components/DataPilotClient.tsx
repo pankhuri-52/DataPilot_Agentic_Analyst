@@ -5,9 +5,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { AlertCircle, Send, Loader2 } from "lucide-react";
-import { StepLoader } from "./StepLoader";
 import { PlanCard } from "./PlanCard";
 import { ArtifactCard } from "./ArtifactCard";
+import { ExecutionPlanPanel } from "./ExecutionPlanPanel";
+import { ResponseSummary } from "./ResponseSummary";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/AuthContext";
 import {
@@ -17,7 +18,7 @@ import {
   conversationMessagesKey,
 } from "@/contexts/ChatContext";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+import { API_BASE, fetchWithRetry } from "@/lib/httpClient";
 
 interface TraceEntry {
   agent: string;
@@ -44,7 +45,10 @@ interface AskResponse {
     title?: string;
   };
   explanation?: string;
+  answer_summary?: string;
+  follow_up_suggestions?: string[];
   trace?: TraceEntry[];
+  empty_result_reason?: string;
   conversation_id?: string;
   thread_id?: string;
 }
@@ -66,8 +70,14 @@ function extractPlanFromTrace(trace: TraceEntry[]): Record<string, unknown> | un
   const plannerEntry = trace.find((e) => e.agent === "planner");
   if (!plannerEntry?.output) return undefined;
   const o = plannerEntry.output as Record<string, unknown>;
+  const execSteps = o.execution_steps;
+  const base: Record<string, unknown> = {};
+  if (Array.isArray(execSteps)) {
+    base.execution_steps = execSteps;
+  }
   if (o.metrics && Array.isArray(o.metrics)) {
     return {
+      ...base,
       metrics: o.metrics,
       dimensions: (o.dimensions as string[]) ?? [],
       filters: (o.filters as Record<string, unknown>) ?? {},
@@ -76,12 +86,21 @@ function extractPlanFromTrace(trace: TraceEntry[]): Record<string, unknown> | un
   }
   if (o.clarifying_questions && Array.isArray(o.clarifying_questions)) {
     return {
+      ...base,
       is_valid: false,
       clarifying_questions: o.clarifying_questions,
       query_scope: typeof o.query_scope === "string" ? o.query_scope : undefined,
     };
   }
+  if (Object.keys(base).length > 0) {
+    return base;
+  }
   return undefined;
+}
+
+function hasClarifyingQuestions(plan?: Record<string, unknown>): boolean {
+  const q = plan?.clarifying_questions;
+  return Array.isArray(q) && q.length > 0;
 }
 
 export function DataPilotClient() {
@@ -99,13 +118,18 @@ export function DataPilotClient() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const queryInputRef = useRef<HTMLInputElement>(null);
+  /** Prevents double-submit before React commits loading/currentConversationId (avoids duplicate conversations). */
+  const askInFlightRef = useRef(false);
+  const continueInFlightRef = useRef(false);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
 
   useEffect(() => {
-    scrollToBottom();
+    const id = window.setTimeout(() => scrollToBottom(), 100);
+    return () => clearTimeout(id);
   }, [messages]);
 
   /** User text for the turn that owns this assistant bubble (for persistence on /ask/continue). */
@@ -122,6 +146,8 @@ export function DataPilotClient() {
   async function handleContinue(message: Message, approved = true) {
     const threadId = message.pendingInterrupt?.thread_id;
     if (!threadId) return;
+    if (continueInFlightRef.current || loading) return;
+    continueInFlightRef.current = true;
     const assistantMessageId = message.id;
     const convKey = conversationMessagesKey(message.conversationId ?? currentConversationId);
 
@@ -142,16 +168,20 @@ export function DataPilotClient() {
     const continueConvId = message.conversationId ?? currentConversationId ?? undefined;
 
     try {
-      const res = await fetch(`${API_BASE}/ask/continue`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          thread_id: threadId,
-          conversation_id: continueConvId,
-          approved,
-          original_query: precedingUserContent(convKey, assistantMessageId) || undefined,
-        }),
-      });
+      const res = await fetchWithRetry(
+        `${API_BASE}/ask/continue`,
+        {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            thread_id: threadId,
+            conversation_id: continueConvId,
+            approved,
+            original_query: precedingUserContent(convKey, assistantMessageId) || undefined,
+          }),
+        },
+        { logLabel: "POST /ask/continue (stream)" }
+      );
 
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -324,6 +354,7 @@ export function DataPilotClient() {
         )
       );
     } finally {
+      continueInFlightRef.current = false;
       setLoading(false);
     }
   }
@@ -332,6 +363,8 @@ export function DataPilotClient() {
     e.preventDefault();
     const text = query.trim();
     if (!text) return;
+    if (askInFlightRef.current || loading) return;
+    askInFlightRef.current = true;
 
     const token = getAccessToken();
     const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -341,11 +374,15 @@ export function DataPilotClient() {
     if (user && token && !streamConversationId) {
       const title = text.length > 80 ? `${text.slice(0, 80)}…` : text;
       try {
-        const cr = await fetch(`${API_BASE}/conversations`, {
-          method: "POST",
-          headers,
-          body: JSON.stringify({ title }),
-        });
+        const cr = await fetchWithRetry(
+          `${API_BASE}/conversations`,
+          {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ title }),
+          },
+          { retriableStatuses: [], logLabel: "POST /conversations" }
+        );
         if (!cr.ok) {
           const errBody = await cr.json().catch(() => ({}));
           throw new Error(
@@ -359,6 +396,7 @@ export function DataPilotClient() {
         fetchConversations();
       } catch (createErr) {
         setError(createErr instanceof Error ? createErr.message : "Could not create conversation");
+        askInFlightRef.current = false;
         return;
       }
     }
@@ -387,14 +425,18 @@ export function DataPilotClient() {
     patchMessages(streamKey, (prev) => [...prev, assistantMessage]);
 
     try {
-      const res = await fetch(`${API_BASE}/ask/stream`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          query: text,
-          conversation_id: streamConversationId || undefined,
-        }),
-      });
+      const res = await fetchWithRetry(
+        `${API_BASE}/ask/stream`,
+        {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            query: text,
+            conversation_id: streamConversationId || undefined,
+          }),
+        },
+        { logLabel: "POST /ask/stream" }
+      );
 
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -590,6 +632,7 @@ export function DataPilotClient() {
         )
       );
     } finally {
+      askInFlightRef.current = false;
       setLoading(false);
     }
   }
@@ -644,46 +687,76 @@ export function DataPilotClient() {
                     </Alert>
                   )}
 
+                  {/* Approval must appear before the long execution plan so users are not stuck waiting */}
                   {message.pendingInterrupt && (
-                    <div className="space-y-4">
-                      {message.plan && <PlanCard plan={message.plan} />}
-                      {(message.liveTrace ?? []).length > 0 && (
-                        <StepLoader liveTrace={message.liveTrace ?? []} isLoading={false} />
-                      )}
+                    <div className="space-y-3">
+                      <Alert className="rounded-lg border-primary/40 bg-primary/5">
+                        <AlertTitle>Action required</AlertTitle>
+                        <AlertDescription>
+                          The run pauses here until you approve running the query against your
+                          warehouse. Review SQL and estimated cost (if shown), then choose Yes or
+                          No.
+                        </AlertDescription>
+                      </Alert>
                       <div className="rounded-lg border border-primary/30 bg-accent/20 p-4 space-y-3">
-                        {message.pendingInterrupt.reason === "approve_tables" && (
-                          <>
-                            <p className="text-xs font-medium">Tables to be used:</p>
-                            <ul className="text-xs text-muted-foreground list-disc list-inside">
-                              {((message.pendingInterrupt.tables_used ?? message.pendingInterrupt.data?.tables ?? []) as string[]).map((t) => (
-                                <li key={t}>{t}</li>
-                              ))}
-                            </ul>
-                            <p className="text-xs text-muted-foreground">Proceed with these tables?</p>
-                          </>
-                        )}
-                        {message.pendingInterrupt.reason === "execute_query" && (
+                        {(message.pendingInterrupt.reason === "execute_query" ||
+                          message.pendingInterrupt.data?.reason === "execute_query") ? (
                           <>
                             <p className="text-xs font-medium">Query ready to execute</p>
-                            {message.pendingInterrupt.sql && (
-                              <pre className="text-[11px] overflow-x-auto rounded bg-muted/50 p-2 max-h-32">
-                                {message.pendingInterrupt.sql}
-                              </pre>
-                            )}
-                            {(message.pendingInterrupt.bytes_scanned != null || message.pendingInterrupt.estimated_cost != null) && (
-                              <p className="text-xs text-muted-foreground">
-                                {message.pendingInterrupt.bytes_scanned != null &&
-                                  `~${(message.pendingInterrupt.bytes_scanned / (1024 * 1024)).toFixed(2)} MB scanned`}
-                                {message.pendingInterrupt.estimated_cost != null &&
-                                  ` · ~$${message.pendingInterrupt.estimated_cost.toFixed(6)} estimated cost`}
-                              </p>
-                            )}
-                            <p className="text-xs text-muted-foreground">Execute this query?</p>
+                            {(() => {
+                              const intr = message.pendingInterrupt!;
+                              const sql =
+                                intr.sql ?? (intr.data?.sql as string | undefined);
+                              const bytes =
+                                intr.bytes_scanned ??
+                                (intr.data?.bytes_scanned as number | undefined);
+                              const cost =
+                                intr.estimated_cost ??
+                                (intr.data?.estimated_cost as number | undefined);
+                              const dialect = intr.data?.dialect as string | undefined;
+                              return (
+                                <>
+                                  {!sql && (
+                                    <p className="text-xs text-amber-700 dark:text-amber-500">
+                                      SQL preview was not included in the response. You can still
+                                      try Yes to continue, or No to cancel.
+                                    </p>
+                                  )}
+                                  {sql && (
+                                    <pre className="text-[11px] overflow-x-auto rounded bg-muted/50 p-2 max-h-32">
+                                      {sql}
+                                    </pre>
+                                  )}
+                                  {dialect === "postgres" &&
+                                    bytes == null &&
+                                    cost == null && (
+                                      <p className="text-xs text-muted-foreground">
+                                        Cost and bytes estimates are available for BigQuery only.
+                                      </p>
+                                    )}
+                                  {(bytes != null || cost != null) && (
+                                    <p className="text-xs text-muted-foreground">
+                                      {bytes != null &&
+                                        `~${(bytes / (1024 * 1024)).toFixed(2)} MB scanned`}
+                                      {cost != null && ` · ~$${cost.toFixed(6)} estimated cost`}
+                                    </p>
+                                  )}
+                                  <p className="text-xs text-muted-foreground">
+                                    Execute this query?
+                                  </p>
+                                </>
+                              );
+                            })()}
                           </>
+                        ) : (
+                          <p className="text-xs text-muted-foreground">
+                            Confirmation required to continue.
+                          </p>
                         )}
                         <div className="flex gap-2">
                           <Button
                             size="sm"
+                            className="cursor-pointer"
                             onClick={() => message.pendingInterrupt && handleContinue(message, true)}
                           >
                             Yes
@@ -691,6 +764,7 @@ export function DataPilotClient() {
                           <Button
                             size="sm"
                             variant="outline"
+                            className="cursor-pointer"
                             onClick={() => message.pendingInterrupt && handleContinue(message, false)}
                           >
                             No
@@ -700,78 +774,108 @@ export function DataPilotClient() {
                     </div>
                   )}
 
-                  {message.loading && !message.pendingInterrupt && (
-                    <div className="space-y-4">
-                      {message.plan && (
-                        <PlanCard plan={message.plan} />
-                      )}
-                      <StepLoader
-                        liveTrace={message.liveTrace ?? []}
-                        isLoading={message.loading}
-                      />
-                    </div>
-                  )}
+                  {(() => {
+                    const res = message.response as AskResponse | undefined;
+                    const trace = (res?.trace ?? message.liveTrace ?? []) as TraceEntry[];
+                    const effectivePlan = (message.plan ??
+                      res?.plan ??
+                      extractPlanFromTrace(trace)) as Record<string, unknown> | undefined;
+                    const clarifying = hasClarifyingQuestions(effectivePlan);
+                    const showPanel =
+                      !clarifying &&
+                      (Boolean(message.loading) ||
+                        Boolean(message.pendingInterrupt) ||
+                        effectivePlan?.is_valid === true);
+
+                    return (
+                      <>
+                        {clarifying && effectivePlan && <PlanCard plan={effectivePlan} />}
+                        {showPanel && (
+                          <ExecutionPlanPanel
+                            key={message.id}
+                            plan={effectivePlan}
+                            liveTrace={trace}
+                            isLoading={Boolean(message.loading && !message.pendingInterrupt)}
+                            isTurnComplete={Boolean(res && !message.loading)}
+                            pendingInterrupt={
+                              message.pendingInterrupt
+                                ? {
+                                    reason: message.pendingInterrupt.reason,
+                                    data: message.pendingInterrupt.data,
+                                  }
+                                : undefined
+                            }
+                          />
+                        )}
+                      </>
+                    );
+                  })()}
 
                   {message.response && !message.loading && (() => {
                     const res = message.response as AskResponse;
+                    const resultsList = Array.isArray(res.results) ? res.results : [];
+                    const hasRows = resultsList.length > 0;
+                    const answerSummary = res.answer_summary?.trim() || "";
+                    const followUps = res.follow_up_suggestions ?? [];
+                    const explanationText = (res.explanation ?? "").trim();
+                    const emptyReason = (res.empty_result_reason as string | undefined)?.trim();
+                    const showOutcomeCard =
+                      !hasRows &&
+                      (explanationText.length > 0 || !!emptyReason || !!res.chart_spec);
                     return (
-                    <div className="space-y-4">
-                      {(message.plan ?? res?.plan) && (
-                        <PlanCard plan={message.plan ?? res?.plan ?? {}} />
-                      )}
-                      {(res.trace ?? message.liveTrace ?? []).length > 0 && (
-                        <StepLoader
-                          liveTrace={res.trace ?? message.liveTrace ?? []}
-                          isLoading={false}
-                        />
-                      )}
-                      {res.missing_explanation && (
-                        <Alert className="rounded-lg">
-                          <AlertTitle>Partial data</AlertTitle>
-                          <AlertDescription>
-                            {res.missing_explanation}
-                          </AlertDescription>
-                        </Alert>
-                      )}
-                      {res.results &&
-                        res.results.length > 0 && (
+                      <div className="space-y-4">
+                        {res.missing_explanation && (
+                          <Alert className="rounded-lg">
+                            <AlertTitle>Partial data</AlertTitle>
+                            <AlertDescription>{res.missing_explanation}</AlertDescription>
+                          </Alert>
+                        )}
+                        {hasRows && (
                           <ArtifactCard
-                            title={
-                              res.chart_spec?.title || "Results"
-                            }
+                            title={res.chart_spec?.title || "Results"}
                             explanation={res.explanation}
                             chartSpec={res.chart_spec}
-                            results={res.results}
+                            results={resultsList}
                             sql={res.sql}
                             dataFeasibility={res.data_feasibility}
                             validationOk={res.validation_ok}
                           />
                         )}
-                      {res.results?.length === 0 &&
-                        res.explanation && (
-                          <div className="rounded-lg border border-border bg-card p-4">
-                            <p className="text-sm text-muted-foreground">
-                              {res.explanation}
-                            </p>
+                        {showOutcomeCard && (
+                          <div className="rounded-lg border border-border bg-card p-4 space-y-2">
+                            {res.chart_spec?.title && (
+                              <p className="text-sm font-medium">{res.chart_spec.title}</p>
+                            )}
+                            {explanationText && (
+                              <p className="text-sm text-muted-foreground">{res.explanation}</p>
+                            )}
+                            {emptyReason && !explanationText && (
+                              <p className="text-sm text-muted-foreground">{emptyReason}</p>
+                            )}
                           </div>
                         )}
-                    </div>
+                        {!hasRows &&
+                          !showOutcomeCard &&
+                          !res.missing_explanation &&
+                          (res.validation_ok !== undefined || res.trace) && (
+                            <p className="text-sm text-muted-foreground">
+                              Run finished. No tabular results were returned—check the execution plan
+                              above or try another question.
+                            </p>
+                          )}
+                        {(answerSummary || followUps.length > 0) && (
+                          <ResponseSummary
+                            answerSummary={answerSummary}
+                            followUpSuggestions={followUps}
+                            onFollowUpClick={(text) => {
+                              setQuery(text);
+                              queryInputRef.current?.focus();
+                            }}
+                          />
+                        )}
+                      </div>
                     );
                   })()}
-
-                  {message.error && !message.loading && !message.response && (
-                    <div className="space-y-4">
-                      {(message.plan ?? extractPlanFromTrace(message.liveTrace ?? [])) && (
-                        <PlanCard plan={message.plan ?? extractPlanFromTrace(message.liveTrace ?? []) ?? {}} />
-                      )}
-                      {message.liveTrace && message.liveTrace.length > 0 && (
-                        <StepLoader
-                          liveTrace={message.liveTrace}
-                          isLoading={false}
-                        />
-                      )}
-                    </div>
-                  )}
                 </div>
               )}
             </div>
@@ -789,13 +893,14 @@ export function DataPilotClient() {
         <div ref={messagesEndRef} />
       </div>
 
-      <div className="fixed bottom-0 left-56 right-0 z-20 border-t border-border bg-background/95 px-4 py-4 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+      <div className="fixed bottom-0 left-[var(--sidebar-width)] right-0 z-20 border-t border-border bg-background/95 px-4 py-4 backdrop-blur transition-[left] duration-200 ease-out supports-[backdrop-filter]:bg-background/80">
         <div className="mx-auto max-w-4xl">
           <form
             onSubmit={handleSubmit}
             className="flex gap-2 rounded-xl border border-border bg-muted/30 p-2 transition-colors focus-within:border-primary/50 focus-within:ring-2 focus-within:ring-primary/20"
           >
             <Input
+              ref={queryInputRef}
               placeholder="Ask a question about your data..."
               value={query}
               onChange={(e) => setQuery(e.target.value)}

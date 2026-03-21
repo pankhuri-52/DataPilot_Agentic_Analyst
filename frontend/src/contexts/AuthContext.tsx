@@ -9,7 +9,7 @@ import {
   ReactNode,
 } from "react";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+import { API_BASE, fetchWithRetry } from "@/lib/httpClient";
 
 interface User {
   id: string;
@@ -35,6 +35,23 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 const TOKEN_KEY = "datapilot_access_token";
 const REFRESH_KEY = "datapilot_refresh_token";
 const USER_KEY = "datapilot_user";
+
+function mapAuthFetchError(err: unknown): Error {
+  const msg = err instanceof Error ? err.message : String(err);
+  const isNetwork =
+    msg === "Failed to fetch" ||
+    msg === "Load failed" ||
+    msg.includes("NetworkError") ||
+    err instanceof TypeError;
+  if (isNetwork) {
+    return new Error(
+      `Cannot reach the API at ${API_BASE}. Start the backend (from the backend folder: ` +
+        `python -m uvicorn main:app --reload), or set NEXT_PUBLIC_API_URL in the repo-root .env ` +
+        `or frontend/.env.local if the API is not on this host/port.`
+    );
+  }
+  return err instanceof Error ? err : new Error(msg);
+}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
@@ -70,9 +87,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return;
     }
     try {
-      const res = await fetch(`${API_BASE}/auth/me`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const res = await fetchWithRetry(
+        `${API_BASE}/auth/me`,
+        { headers: { Authorization: `Bearer ${token}` } },
+        { logLabel: "GET /auth/me" }
+      );
       const data = await res.json();
       if (data?.user) {
         setUser(data.user);
@@ -87,11 +106,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      const refreshRes = await fetch(`${API_BASE}/auth/refresh`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ refresh_token: refreshToken }),
-      });
+      const refreshRes = await fetchWithRetry(
+        `${API_BASE}/auth/refresh`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ refresh_token: refreshToken }),
+        },
+        { logLabel: "POST /auth/refresh" }
+      );
       const refreshData = await refreshRes.json().catch(() => ({}));
       if (
         !refreshRes.ok ||
@@ -121,19 +144,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signIn = useCallback(
     async (email: string, password: string) => {
-      const res = await fetch(`${API_BASE}/auth/login`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.detail || "Login failed");
-      }
-      const token = data.access_token;
-      const userData = data.user;
-      if (token && userData) {
-        persistSession(token, data.refresh_token, userData);
+      try {
+        const res = await fetchWithRetry(
+          `${API_BASE}/auth/login`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ email, password }),
+          },
+          { logLabel: "POST /auth/login" }
+        );
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(
+            typeof data?.detail === "string" ? data.detail : "Login failed"
+          );
+        }
+        const token = data.access_token;
+        const userData = data.user;
+        if (token && userData) {
+          persistSession(token, data.refresh_token, userData);
+        }
+      } catch (err) {
+        throw mapAuthFetchError(err);
       }
     },
     [persistSession]
@@ -141,22 +174,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signUp = useCallback(
     async (email: string, password: string, name?: string): Promise<SignUpResult> => {
-      const res = await fetch(`${API_BASE}/auth/signup`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password, name: name || undefined }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.detail || "Sign up failed");
+      try {
+        const res = await fetchWithRetry(
+          `${API_BASE}/auth/signup`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ email, password, name: name || undefined }),
+          },
+          { logLabel: "POST /auth/signup" }
+        );
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(
+            typeof data?.detail === "string" ? data.detail : "Sign up failed"
+          );
+        }
+        const token = data.access_token;
+        const userData = data.user;
+        const requiresConfirmation = data.requires_confirmation === true;
+        if (token && userData && !requiresConfirmation) {
+          persistSession(token, data.refresh_token, userData);
+        }
+        return { requiresConfirmation: requiresConfirmation || undefined };
+      } catch (err) {
+        throw mapAuthFetchError(err);
       }
-      const token = data.access_token;
-      const userData = data.user;
-      const requiresConfirmation = data.requires_confirmation === true;
-      if (token && userData && !requiresConfirmation) {
-        persistSession(token, data.refresh_token, userData);
-      }
-      return { requiresConfirmation: requiresConfirmation || undefined };
     },
     [persistSession]
   );

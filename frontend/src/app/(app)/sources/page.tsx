@@ -7,8 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Plus, Database, Server, Cloud, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+import { API_BASE, fetchWithRetry } from "@/lib/httpClient";
 
 interface ApiSource {
   id: string;
@@ -42,7 +41,9 @@ export default function SourcesPage() {
       setLoading(true);
       setFetchError(null);
       try {
-        const res = await fetch(`${API_BASE}/data-sources/status`);
+        const res = await fetchWithRetry(`${API_BASE}/data-sources/status`, undefined, {
+          logLabel: "GET /data-sources/status",
+        });
         const data = (await res.json()) as StatusResponse;
         if (!cancelled) setStatus(data);
       } catch {

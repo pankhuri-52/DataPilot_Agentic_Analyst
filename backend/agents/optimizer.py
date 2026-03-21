@@ -7,7 +7,7 @@ import json
 import re
 from langgraph.types import interrupt
 
-from llm import get_gemini
+from llm import get_gemini, invoke_with_retry
 from agents.state import TraceEntry
 from agents.schema_utils import load_schema
 
@@ -117,7 +117,7 @@ def run_optimizer(state: dict) -> dict:
                 project=project_id,
                 dataset=dataset_id,
             )
-        response = llm.invoke(prompt)
+        response = invoke_with_retry(llm, prompt)
         sql = (response.content if hasattr(response, "content") else str(response)).strip()
         if sql.startswith("```"):
             sql = re.sub(r"^```\w*\n?", "", sql)

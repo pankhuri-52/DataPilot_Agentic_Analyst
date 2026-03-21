@@ -12,7 +12,7 @@ import {
 } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+import { API_BASE, fetchWithRetry } from "@/lib/httpClient";
 
 /** Messages when no Supabase conversation is selected (signed-out or new chat). */
 export const GUEST_MESSAGES_KEY = "__guest__";
@@ -130,9 +130,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     const token = getAccessToken();
     if (!token) return;
     try {
-      const res = await fetch(`${API_BASE}/conversations`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const res = await fetchWithRetry(
+        `${API_BASE}/conversations`,
+        { headers: { Authorization: `Bearer ${token}` } },
+        { logLabel: "GET /conversations" }
+      );
       if (res.ok) {
         const data = await res.json();
         setConversations(data.conversations || []);
@@ -162,9 +164,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       const token = getAccessToken();
       if (!token) return;
       try {
-        const res = await fetch(`${API_BASE}/conversations/${convId}/messages`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
+        const res = await fetchWithRetry(
+          `${API_BASE}/conversations/${convId}/messages`,
+          { headers: { Authorization: `Bearer ${token}` } },
+          { logLabel: "GET /conversations/.../messages" }
+        );
         if (res.ok) {
           const data = await res.json();
           const msgs = (data.messages || []) as {

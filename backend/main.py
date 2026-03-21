@@ -19,7 +19,28 @@ if _env.exists():
     from dotenv import load_dotenv
     load_dotenv(_env)
 
+from core.logging_config import setup_logging
+
+setup_logging()
+
 logger = logging.getLogger("datapilot")
+
+
+def _auth_unexpected_error(exc: BaseException) -> HTTPException:
+    """Turn missing deps / infra issues into actionable 503 messages."""
+    if isinstance(exc, ModuleNotFoundError):
+        name = getattr(exc, "name", None) or str(exc)
+        return HTTPException(
+            status_code=503,
+            detail=(
+                f'Missing Python package "{name}". From the backend folder run: '
+                "py -3.12 -m pip install -r requirements.txt "
+                "(use the same interpreter you use to start uvicorn). "
+                "On Windows, if `python` is 3.14+, run the API with: "
+                "py -3.12 -m uvicorn main:app --reload"
+            ),
+        )
+    return HTTPException(status_code=503, detail=f"Auth error: {exc}")
 
 
 def _cors_allow_origins() -> list[str]:
@@ -44,7 +65,9 @@ def _cors_allow_origin_regex() -> str | None:
     raw = os.getenv("CORS_ALLOW_ORIGIN_REGEX")
     if raw is not None:
         return raw.strip() or None
-    return r"https?://(localhost|127\.0\.0\.1)(:\d+)?$"
+    # Include [::1] — on Windows, localhost often resolves to IPv6; browsers may send
+    # Origin: http://[::1]:3000, which must match or preflight returns 400 and fetch fails.
+    return r"https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$"
 
 
 app = FastAPI(
@@ -96,7 +119,8 @@ def get_current_user_optional(authorization: str | None = Header(default=None)):
     token = _get_bearer_token(authorization)
     if not token:
         return None
-    from auth import get_user_from_token
+    from supabase_service import get_user_from_token
+
     return get_user_from_token(token)
 
 
@@ -111,7 +135,8 @@ def auth_signup(body: dict = Body(default={"email": "", "password": "", "name": 
     if len(password) < 6:
         raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
     try:
-        from auth import sign_up
+        from supabase_service import sign_up
+
         return sign_up(email, password, name)
     except ValueError as e:
         if "must be set" in str(e).lower():
@@ -121,7 +146,7 @@ def auth_signup(body: dict = Body(default={"email": "", "password": "", "name": 
             )
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=503, detail=f"Auth error: {str(e)}")
+        raise _auth_unexpected_error(e)
 
 
 @app.post("/auth/login")
@@ -132,7 +157,8 @@ def auth_login(body: dict = Body(default={"email": "", "password": ""})):
     if not email or not password:
         raise HTTPException(status_code=400, detail="email and password are required")
     try:
-        from auth import sign_in
+        from supabase_service import sign_in
+
         return sign_in(email, password)
     except ValueError as e:
         if "must be set" in str(e).lower():
@@ -142,7 +168,7 @@ def auth_login(body: dict = Body(default={"email": "", "password": ""})):
             )
         raise HTTPException(status_code=401, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=503, detail=f"Auth error: {str(e)}")
+        raise _auth_unexpected_error(e)
 
 
 @app.post("/auth/forgot-password")
@@ -152,7 +178,8 @@ def auth_forgot_password(body: dict = Body(default={"email": ""})):
     if not email:
         raise HTTPException(status_code=400, detail="Email is required")
     try:
-        from auth import reset_password_for_email
+        from supabase_service import reset_password_for_email
+
         redirect_to = os.getenv("FRONTEND_URL", "http://localhost:3000") + "/reset-password"
         reset_password_for_email(email, redirect_to)
         return {"message": "If an account exists with this email, you will receive a password reset link."}
@@ -183,7 +210,8 @@ def auth_refresh(body: dict = Body(default={"refresh_token": ""})):
     if not refresh_token:
         raise HTTPException(status_code=400, detail="refresh_token is required")
     try:
-        from auth import refresh_session
+        from supabase_service import refresh_session
+
         return refresh_session(refresh_token)
     except ValueError as e:
         if "must be set" in str(e).lower():
@@ -193,7 +221,7 @@ def auth_refresh(body: dict = Body(default={"refresh_token": ""})):
             )
         raise HTTPException(status_code=401, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=503, detail=f"Auth error: {str(e)}")
+        raise _auth_unexpected_error(e)
 
 
 # ---- Chat (conversations + messages) ----
@@ -233,7 +261,8 @@ def _require_user(authorization: str | None = Header(default=None)):
 def list_conversations(user=Depends(_require_user)):
     """List conversations for the current user."""
     try:
-        from chat import list_conversations as _list
+        from supabase_service import list_conversations as _list
+
         return {"conversations": _list(user["id"])}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -250,7 +279,8 @@ def create_conversation(
     """Create a new conversation."""
     title = (body or {}).get("title", "New conversation")
     try:
-        from chat import create_conversation as _create
+        from supabase_service import create_conversation as _create
+
         conv = _create(user["id"], title)
         return conv
     except ValueError as e:
@@ -264,7 +294,8 @@ def create_conversation(
 def get_messages(conversation_id: str, user=Depends(_require_user)):
     """List messages in a conversation."""
     try:
-        from chat import list_messages as _list
+        from supabase_service import list_messages as _list
+
         return {"messages": _list(conversation_id, user["id"])}
     except Exception as e:
         logger.exception("get_messages failed")
@@ -374,7 +405,8 @@ def _get_conversation_history(user_id: str, conversation_id: str | None) -> list
     if not conversation_id or not user_id:
         return []
     try:
-        from chat import list_messages
+        from supabase_service import list_messages
+
         msgs = list_messages(conversation_id, user_id)
         return [
             {"role": m.get("role", ""), "content": m.get("content", ""), "metadata": m.get("metadata") or {}}
@@ -397,6 +429,8 @@ def _metadata_for_storage(response: dict) -> dict:
         "data_feasibility": response.get("data_feasibility"),
         "chart_spec": response.get("chart_spec"),
         "sql": response.get("sql"),
+        "answer_summary": response.get("answer_summary"),
+        "follow_up_suggestions": response.get("follow_up_suggestions"),
     }
     if clarifying:
         meta["clarifying_questions"] = clarifying
@@ -423,7 +457,7 @@ def _save_user_turn_only(
     if not q:
         return conversation_id
     try:
-        from chat import create_conversation, create_message, get_conversation, list_messages
+        from supabase_service import create_conversation, create_message, get_conversation, list_messages
 
         if conversation_id:
             conv = get_conversation(conversation_id, user_id)
@@ -438,6 +472,12 @@ def _save_user_turn_only(
                     return conversation_id
                 create_message(conversation_id, user_id, "user", q)
                 return conversation_id
+            # Client sent an id we cannot resolve — do not create a new conversation (avoids duplicate chats).
+            logger.warning(
+                "save_user_turn_only: conversation_id=%s not found for user; skipping persist",
+                conversation_id,
+            )
+            return None
 
         title = q[:80] + ("..." if len(q) > 80 else "")
         conv = create_conversation(user_id, title=title)
@@ -461,7 +501,7 @@ def _save_ask_messages(
     Returns conversation_id.
     """
     try:
-        from chat import create_conversation, create_message, get_conversation
+        from supabase_service import create_conversation, create_message, get_conversation
 
         conv_id = conversation_id
         if skip_user_message:
@@ -512,9 +552,45 @@ def _build_ask_response(state: dict) -> dict:
         "validation_ok": state.get("validation_ok"),
         "chart_spec": state.get("chart_spec"),
         "explanation": state.get("explanation"),
+        "answer_summary": state.get("answer_summary"),
+        "follow_up_suggestions": state.get("follow_up_suggestions"),
         "trace": state.get("trace", []),
         "data_range": state.get("data_range"),
         "empty_result_reason": state.get("empty_result_reason"),
+    }
+
+
+def _merge_interrupt_client(state: dict, payload: dict) -> dict:
+    """Merge LangGraph interrupt payload with checkpoint state so sql/cost are always exposed."""
+    p = dict(payload) if isinstance(payload, dict) else {}
+
+    def pick(key: str):
+        v = p.get(key)
+        return v if v is not None else state.get(key)
+
+    sql = pick("sql")
+    bytes_scanned = pick("bytes_scanned")
+    estimated_cost = pick("estimated_cost")
+    reason = p.get("reason") or "unknown"
+    p["reason"] = reason
+    if sql is not None:
+        p["sql"] = sql
+    if bytes_scanned is not None:
+        p["bytes_scanned"] = bytes_scanned
+    if estimated_cost is not None:
+        p["estimated_cost"] = estimated_cost
+    tables_used = state.get("tables_used")
+    if tables_used is None:
+        tables_used = p.get("tables") or []
+    return {
+        "data": p,
+        "trace": state.get("trace", []),
+        "plan": state.get("plan"),
+        "data_feasibility": state.get("data_feasibility"),
+        "tables_used": tables_used,
+        "sql": sql,
+        "bytes_scanned": bytes_scanned,
+        "estimated_cost": estimated_cost,
     }
 
 
@@ -574,13 +650,17 @@ def ask(
             # Extract interrupt payload (may be list of Interrupt objects)
             payload = interrupt_data[0].value if hasattr(interrupt_data[0], "value") else interrupt_data[0]
             if isinstance(payload, dict):
+                merged = _merge_interrupt_client(result, payload)
                 out = {
                     "thread_id": thread_id,
-                    "interrupt": payload,
-                    "trace": result.get("trace", []),
-                    "plan": result.get("plan"),
-                    "data_feasibility": result.get("data_feasibility"),
-                    "tables_used": result.get("tables_used"),
+                    "interrupt": merged["data"],
+                    "trace": merged["trace"],
+                    "plan": merged["plan"],
+                    "data_feasibility": merged["data_feasibility"],
+                    "tables_used": merged["tables_used"],
+                    "sql": merged["sql"],
+                    "bytes_scanned": merged["bytes_scanned"],
+                    "estimated_cost": merged["estimated_cost"],
                 }
                 if user and query:
                     cid = _save_user_turn_only(user["id"], conversation_id, query)
@@ -646,19 +726,11 @@ async def _ask_stream_generator(
                     payload = {}
                 # Use last_state for trace/plan (chunk with interrupt may not have full state)
                 state = last_state if last_state is not None else {}
-                # Tables may be in payload (approve_tables) or state
-                tables_used = state.get("tables_used") or payload.get("tables", [])
+                merged = _merge_interrupt_client(state, payload)
                 interrupt_event = {
                     "type": "interrupt",
                     "thread_id": thread_id,
-                    "data": payload,
-                    "trace": state.get("trace", []),
-                    "plan": state.get("plan"),
-                    "data_feasibility": state.get("data_feasibility"),
-                    "tables_used": tables_used,
-                    "sql": state.get("sql"),
-                    "bytes_scanned": state.get("bytes_scanned"),
-                    "estimated_cost": state.get("estimated_cost"),
+                    **merged,
                 }
                 if user and resume is None and (query or "").strip():
                     persisted = _save_user_turn_only(user["id"], conversation_id, query)
@@ -809,9 +881,10 @@ def llm_chat(body: dict = Body(default={"message": "Hello! What can you help me 
     # If there is no message, use the default message
     message = (body or {}).get("message", "Hello! What can you help me with?")
     try:
-        from llm import get_gemini
+        from llm import get_gemini, invoke_with_retry
+
         model = get_gemini()
-        response = model.invoke(message)
+        response = invoke_with_retry(model, message)
         content = response.content if hasattr(response, "content") else str(response)
         return {"reply": content}
         # print("Calling llm_chat api")

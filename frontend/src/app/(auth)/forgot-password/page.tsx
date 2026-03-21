@@ -8,8 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useAuth } from "@/contexts/AuthContext";
 import { AlertCircle, Mail } from "lucide-react";
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+import { API_BASE, fetchWithRetry } from "@/lib/httpClient";
 
 export default function ForgotPasswordPage() {
   const [email, setEmail] = useState("");
@@ -35,11 +34,15 @@ export default function ForgotPasswordPage() {
     }
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/auth/forgot-password`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: email.trim() }),
-      });
+      const res = await fetchWithRetry(
+        `${API_BASE}/auth/forgot-password`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: email.trim() }),
+        },
+        { logLabel: "POST /auth/forgot-password" }
+      );
       const data = await res.json();
       if (!res.ok) {
         throw new Error(data.detail || "Failed to send reset email");

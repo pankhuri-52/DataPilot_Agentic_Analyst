@@ -2,7 +2,7 @@
 Visualization & Explanation Agent – chart spec and natural language summary.
 """
 from pydantic import BaseModel, Field
-from llm import get_gemini
+from llm import get_gemini, invoke_with_retry
 from agents.state import TraceEntry
 
 
@@ -13,6 +13,13 @@ class VisualizationOutput(BaseModel):
     y_field: str | None = Field(default=None, description="Column name for y-axis")
     title: str | None = Field(default=None, description="Chart title")
     explanation: str = Field(description="Natural language summary of the data for the user")
+    answer_summary: str = Field(
+        description="1-3 sentences that directly answer the user's original question using the results",
+    )
+    follow_up_suggestions: list[str] = Field(
+        default_factory=list,
+        description="2-3 short, concrete follow-up questions the user could ask next about this data",
+    )
 
 
 VIZ_PROMPT = """You are a data visualization agent. Given query results and the analysis plan, produce a chart specification and explanation.
@@ -46,6 +53,8 @@ Your job:
 2. Set x_field and y_field to column names from the results. For pie charts, use one value column.
 3. Write a concise, business-friendly explanation (2-4 sentences) summarizing the key insights.
 4. Set title to a short, descriptive chart title.
+5. answer_summary: 1-3 sentences that directly answer the user's question (not generic chart commentary).
+6. follow_up_suggestions: exactly 2-3 short questions (each under 120 characters) they could ask next about this dataset (e.g. drill-downs, time comparisons).
 """
 
 VIZ_PROMPT_EMPTY = """You are a data visualization agent. The query returned NO data (0 rows). Your job is to produce a helpful explanation for the user.
@@ -65,6 +74,8 @@ Your job:
    - Explains that no data was found for the requested period (e.g., last month).
    - If data_range_info is provided, mention: "Available data spans from {min_date} to {max_date}. Try asking for a time range within this period."
    - Be helpful and suggest what the user could try instead.
+3. answer_summary: 1-2 sentences stating clearly that there were no rows and what to try next.
+4. follow_up_suggestions: 2-3 short alternative questions (e.g. different date range, broader filters).
 """
 
 
@@ -83,6 +94,9 @@ def run_visualization(state: dict) -> dict:
 
     if not raw_results:
         trace.append(TraceEntry(agent="visualization", status="info", message="No results to visualize").model_dump())
+        explanation = "No data was returned for this query."
+        answer_summary = explanation
+        follow_up: list[str] = []
         # Use contextual explanation when data_range or empty_result_reason is available
         if data_range or empty_result_reason:
             data_range_info = (
@@ -102,16 +116,21 @@ def run_visualization(state: dict) -> dict:
                     min_date=data_range.get("min", "?") if data_range else "?",
                     max_date=data_range.get("max", "?") if data_range else "?",
                 )
-                result = structured_llm.invoke(prompt)
+                result = invoke_with_retry(structured_llm, prompt)
                 result_dict = result.model_dump() if hasattr(result, "model_dump") else result
                 explanation = result_dict.get("explanation", empty_result_reason or "No data was returned for this query.")
+                answer_summary = result_dict.get("answer_summary") or explanation
+                raw_fu = result_dict.get("follow_up_suggestions") or []
+                follow_up = [str(x) for x in raw_fu if x][:5]
             except Exception:
                 explanation = empty_result_reason or "No data was returned for this query."
-        else:
-            explanation = "No data was returned for this query."
+                answer_summary = explanation
+                follow_up = []
         return {
             "chart_spec": {"chart_type": "table", "title": "No data", "x_field": None, "y_field": None},
             "explanation": explanation,
+            "answer_summary": answer_summary,
+            "follow_up_suggestions": follow_up,
             "trace": trace,
             "data_range": data_range,
             "empty_result_reason": empty_result_reason,
@@ -136,7 +155,7 @@ def run_visualization(state: dict) -> dict:
             results_sample=results_sample,
             columns=columns,
         )
-        result = structured_llm.invoke(prompt)
+        result = invoke_with_retry(structured_llm, prompt)
 
         result_dict = result.model_dump() if hasattr(result, "model_dump") else result
         chart_spec = {
@@ -146,6 +165,9 @@ def run_visualization(state: dict) -> dict:
             "title": result_dict.get("title", "Results"),
         }
         explanation = result_dict.get("explanation", "Here are the results.")
+        answer_summary = result_dict.get("answer_summary") or explanation
+        raw_fu = result_dict.get("follow_up_suggestions") or []
+        follow_up = [str(x) for x in raw_fu if x][:5]
 
         trace.append(
             TraceEntry(
@@ -156,11 +178,20 @@ def run_visualization(state: dict) -> dict:
             ).model_dump()
         )
 
-        return {"chart_spec": chart_spec, "explanation": explanation, "trace": trace}
+        return {
+            "chart_spec": chart_spec,
+            "explanation": explanation,
+            "answer_summary": answer_summary,
+            "follow_up_suggestions": follow_up,
+            "trace": trace,
+        }
     except Exception as e:
         trace.append(TraceEntry(agent="visualization", status="error", message=str(e)).model_dump())
+        err_expl = f"Here are the results. (Visualization error: {e})"
         return {
             "chart_spec": {"chart_type": "table", "title": "Results", "x_field": None, "y_field": None},
-            "explanation": f"Here are the results. (Visualization error: {e})",
+            "explanation": err_expl,
+            "answer_summary": err_expl,
+            "follow_up_suggestions": [],
             "trace": trace,
         }

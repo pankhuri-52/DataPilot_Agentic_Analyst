@@ -89,10 +89,15 @@ export default function ChatsPage() {
                         {conv.title || "Untitled"}
                       </CardTitle>
                       <CardDescription>
-                        {new Date(conv.updated_at).toLocaleDateString(undefined, {
-                          dateStyle: "medium",
-                          timeStyle: "short",
-                        })}
+                        {(() => {
+                          const d = new Date(conv.updated_at);
+                          if (Number.isNaN(d.getTime())) return "—";
+                          /* timeStyle is only valid for toLocaleString, not toLocaleDateString */
+                          return d.toLocaleString(undefined, {
+                            dateStyle: "medium",
+                            timeStyle: "short",
+                          });
+                        })()}
                       </CardDescription>
                     </div>
                   </CardHeader>

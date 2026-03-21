@@ -5,6 +5,18 @@ from typing import TypedDict, Optional, Any
 from pydantic import BaseModel, Field
 
 
+class PlanStep(BaseModel):
+    """One row in the UI execution checklist; phase ties the step to the agent pipeline."""
+    phase: str = Field(
+        description="One of: planner, discovery, optimizer, executor, validator, visualization"
+    )
+    title: str = Field(description="Short user-visible label for this step")
+    detail: Optional[str] = Field(
+        default=None,
+        description="Optional longer description; for planner step, summarize what we will measure and break down",
+    )
+
+
 class AnalysisPlan(BaseModel):
     """Structured plan from the Planning Agent."""
     metrics: list[str] = Field(description="What to measure (e.g. revenue, total_amount, count)")
@@ -15,6 +27,10 @@ class AnalysisPlan(BaseModel):
     query_scope: Optional[str] = Field(
         default=None,
         description="data_question | out_of_scope | needs_clarification — classify the user's message",
+    )
+    execution_steps: list[PlanStep] = Field(
+        default_factory=list,
+        description="When is_valid=true: exactly 6 steps in pipeline order (planner→…→visualization) for the UI checklist",
     )
 
 
@@ -50,7 +66,7 @@ class DataPilotState(TypedDict, total=False):
     data_feasibility: str  # "full" | "partial" | "none"
     nearest_plan: Optional[dict[str, Any]]  # AnalysisPlan as dict if partial
     missing_explanation: Optional[str]
-    tables_used: list[str]  # From Discovery; used for approval interrupt
+    tables_used: list[str]  # From Discovery; informs SQL generation
     sql: Optional[str]  # From Optimizer when user approves execution
     bytes_scanned: Optional[int]  # BigQuery dry run estimate
     estimated_cost: Optional[float]  # BigQuery cost estimate (USD)
@@ -58,6 +74,8 @@ class DataPilotState(TypedDict, total=False):
     validation_ok: bool
     chart_spec: Optional[dict[str, Any]]
     explanation: str
+    answer_summary: Optional[str]
+    follow_up_suggestions: Optional[list[str]]
     trace: list[dict[str, Any]]
     data_range: Optional[dict[str, Any]]  # {"min": "YYYY-MM-DD", "max": "YYYY-MM-DD", "table": "...", "column": "..."}
     empty_result_reason: Optional[str]  # Contextual explanation when query returns 0 rows

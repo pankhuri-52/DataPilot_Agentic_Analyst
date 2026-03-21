@@ -1,12 +1,10 @@
 """
 Data Discovery Agent – checks if the analysis plan can be fulfilled with available data.
-Pauses for user approval of tables_used via interrupt() before proceeding.
+Proceeds automatically when feasibility is full or partial (no user approval).
 """
 import json
-import os
-from langgraph.types import interrupt
 
-from llm import get_gemini
+from llm import get_gemini, invoke_with_retry
 from agents.state import DataFeasibility, TraceEntry
 from agents.schema_utils import load_schema, extract_data_ranges
 
@@ -85,7 +83,7 @@ def run_discovery(state: dict) -> dict:
             schema_json=schema_json,
             data_ranges_section=data_ranges_section,
         )
-        result = structured_llm.invoke(prompt)
+        result = invoke_with_retry(structured_llm, prompt)
 
         result_dict = result.model_dump() if hasattr(result, "model_dump") else result
         feasibility = result_dict.get("feasibility", "none")
@@ -101,18 +99,6 @@ def run_discovery(state: dict) -> dict:
             ).model_dump()
         )
 
-        # Interrupt: ask user to approve tables before proceeding
-        if feasibility in ("full", "partial") and tables_used:
-            skip_hil = os.getenv("DATAPILOT_SKIP_INTERRUPTS", "").strip().lower() in ("1", "true", "yes")
-            if skip_hil:
-                approved = True
-            else:
-                interrupt_payload = {"reason": "approve_tables", "tables": tables_used}
-                approved = interrupt(interrupt_payload)
-            if not approved:
-                trace.append(TraceEntry(agent="discovery", status="info", message="User declined tables").model_dump())
-                return {"data_feasibility": "none", "trace": trace}
-
         update = {
             "data_feasibility": feasibility,
             "tables_used": tables_used,
@@ -125,11 +111,6 @@ def run_discovery(state: dict) -> dict:
 
         return update
     except Exception as e:
-        # Re-raise interrupt so LangGraph can handle it (don't show raw Interrupt object to user)
-        err_type = type(e).__name__
-        err_str = str(e)
-        if "Interrupt" in err_type or "interrupt" in err_str.lower():
-            raise
         trace.append(TraceEntry(agent="discovery", status="error", message=str(e)).model_dump())
         return {
             "data_feasibility": "none",
