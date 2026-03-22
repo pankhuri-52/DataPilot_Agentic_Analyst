@@ -90,11 +90,19 @@ def run_discovery(state: dict) -> dict:
 
         tables_used = result_dict.get("tables_used", [])
 
+        feasibility_messages = {
+            "full": "All requested metrics and dimensions are available in your connected data.",
+            "partial": "We can answer a close version of your question; some parts were adjusted to match your data.",
+            "none": "Your connected data does not support this analysis as requested.",
+        }
+        user_message = feasibility_messages.get(
+            feasibility, f"Data check result: {feasibility}"
+        )
         trace.append(
             TraceEntry(
                 agent="discovery",
                 status="success",
-                message=f"Feasibility: {feasibility}",
+                message=user_message,
                 output={"feasibility": feasibility, "tables_used": tables_used},
             ).model_dump()
         )

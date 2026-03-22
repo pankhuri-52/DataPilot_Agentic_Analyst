@@ -713,6 +713,15 @@ async def _ask_stream_generator(
 
         if resume is not None:
             input_data = Command(resume=resume)
+            # Checkpoint already holds trace through the interrupt; streaming re-yields full state
+            # first, so without this we would emit duplicate progress for planner/discovery/optimizer.
+            try:
+                snap = graph.get_state(config)
+                vals = getattr(snap, "values", None) if snap is not None else None
+                if isinstance(vals, dict):
+                    prev_trace_len = len(vals.get("trace") or [])
+            except Exception:
+                prev_trace_len = 0
         else:
             input_data = {"query": query, "trace": [], "conversation_history": history}
 

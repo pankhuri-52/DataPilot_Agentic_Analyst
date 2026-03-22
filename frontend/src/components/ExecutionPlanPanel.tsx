@@ -84,10 +84,50 @@ function normalizeExecutionSteps(plan?: Record<string, unknown>): ExecutionStepR
   return rows;
 }
 
-function traceMessageForPhase(trace: TraceEntry[], phase: string): string | undefined {
+function textsRedundant(a: string | undefined, b: string | undefined): boolean {
+  const na = (a ?? "").trim().toLowerCase();
+  const nb = (b ?? "").trim().toLowerCase();
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+  if (na.length >= 14 && nb.length >= 14 && (na.includes(nb) || nb.includes(na))) return true;
+  return false;
+}
+
+const FEASIBILITY_LABELS: Record<string, string> = {
+  full: "All requested metrics and dimensions are available in your connected data.",
+  partial:
+    "We can answer a close version of your question; some parts were adjusted to match your data.",
+  none: "Your connected data does not support this analysis as requested.",
+};
+
+/** Human-friendly line for discovery; supports legacy traces like "Feasibility: full". */
+function formatDiscoveryStatus(
+  rawMessage: string | undefined,
+  output?: Record<string, unknown>
+): string | undefined {
+  const fromOutput = output?.feasibility;
+  if (typeof fromOutput === "string") {
+    const key = fromOutput.trim().toLowerCase();
+    if (key in FEASIBILITY_LABELS) return FEASIBILITY_LABELS[key];
+  }
+  const m = (rawMessage ?? "").trim();
+  if (!m) return undefined;
+  const lower = m.toLowerCase();
+  if (lower.startsWith("feasibility:")) {
+    const rest = lower.replace(/^feasibility:\s*/i, "").trim();
+    if (rest in FEASIBILITY_LABELS) return FEASIBILITY_LABELS[rest];
+  }
+  return m;
+}
+
+function traceDisplayForPhase(trace: TraceEntry[], phase: string): string | undefined {
   const entries = trace.filter((e) => e.agent === phase);
   const last = entries[entries.length - 1];
-  return last?.message;
+  if (!last?.message) return undefined;
+  if (phase === "discovery") {
+    return formatDiscoveryStatus(last.message, last.output);
+  }
+  return last.message;
 }
 
 export interface ExecutionPlanPanelProps {
@@ -218,9 +258,13 @@ export function ExecutionPlanPanel({
                 const ph = step.phase;
                 if (!isPhase(ph)) return null;
                 const status = stepStatus(ph);
-                const msg = traceMessageForPhase(liveTrace, ph);
-                const detail = step.detail?.trim();
-                const showBody = detail || msg;
+                const statusLine = traceDisplayForPhase(liveTrace, ph);
+                const detailRaw = step.detail?.trim();
+                const detail =
+                  detailRaw && statusLine && textsRedundant(detailRaw, statusLine)
+                    ? undefined
+                    : detailRaw;
+                const showBody = Boolean(detail || statusLine);
 
                 return (
                   <AccordionItem key={ph} value={ph} className="border-border/80">
@@ -263,9 +307,9 @@ export function ExecutionPlanPanel({
                                     Awaiting your confirmation to run the query
                                   </span>
                                 )}
-                                {msg && status !== "pending" && (
-                                  <span className="text-[11px] font-normal text-muted-foreground line-clamp-2">
-                                    {msg}
+                                {statusLine && status !== "pending" && (
+                                  <span className="text-[11px] font-normal text-muted-foreground line-clamp-3">
+                                    {statusLine}
                                   </span>
                                 )}
                               </div>
@@ -275,9 +319,6 @@ export function ExecutionPlanPanel({
                                 <p className="mt-1 whitespace-pre-wrap text-xs text-muted-foreground">
                                   {detail}
                                 </p>
-                              )}
-                              {msg && (
-                                <p className="mt-1 text-xs text-muted-foreground/90">{msg}</p>
                               )}
                             </AccordionContent>
                           </>
