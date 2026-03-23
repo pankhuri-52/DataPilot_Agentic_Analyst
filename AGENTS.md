@@ -6,6 +6,8 @@ This file orients automated assistants and human contributors working on **DataP
 
 DataPilot is a chat UI over a **single configured warehouse** (BigQuery or PostgreSQL, chosen via environment variables). Users sign in with Supabase; questions run through a **LangGraph** pipeline that plans, checks schema fit, generates SQL, asks for approval once (before execute, with optional BigQuery cost estimate), executes, validates, and produces chart specs + explanations.
 
+The default **retail / B2B POC model** includes dimensions and facts beyond core orders: **brands**, **sales_reps**, **warehouses**, **campaigns**, **shipments**, **return_items**, **order_campaigns**, plus **`products.brand_id`** and **`customers.sales_rep_id`**. Agents read table/column descriptions and relationships from **`backend/schema/metadata.json`** (static); live SQL runs against the configured warehouse.
+
 **Non-goals today:** Multi-tenant arbitrary “connect any URL” sources, full OAuth connector marketplace, or running without a configured warehouse.
 
 ## Layout
@@ -23,6 +25,10 @@ DataPilot is a chat UI over a **single configured warehouse** (BigQuery or Postg
 | `frontend/src/components/DataPilotClient.tsx` | SSE client, interrupts, message list |
 | `frontend/src/contexts/ChatContext.tsx` | Conversations + messages |
 | `frontend/src/app/(app)/sources/page.tsx` | Reads `GET /data-sources/status` |
+| `backend/schema/metadata.json` | Schema catalog for planner / discovery / optimizer (tables, columns, `relationships`, optional `data_range` on date columns) |
+| `backend/bigquery/scripts/DDL/` | `01_ddl.sql` (base tables), `02_ddl_new_tables.sql` (extended model + column alters) |
+| `backend/bigquery/scripts/DML/` | `01_inserts.sql` (small base seed), `02_dml_seed_enriched.sql` (~1 year synthetic load; replaces all rows) |
+| `backend/bigquery/scripts/README_DATA_MODEL.md` | ER overview, run order, example business questions |
 
 ## Critical flows
 
@@ -43,5 +49,6 @@ DataPilot is a chat UI over a **single configured warehouse** (BigQuery or Postg
 - **ExecutionPlanPanel** – Checklist UX is driven by `plan.execution_steps`, trace order, `isLoading`, and `execute_query` interrupts; changing trace shape affects step states.
 - **Planner structured output** – `AnalysisPlan` includes `query_scope` and `execution_steps` (six phases: planner → visualization); `PlanCard` is only for clarifying / out-of-scope messages.
 - **Supabase insert** – `create_conversation` / `create_message` use `.select(...)` after insert so rows are returned reliably.
+- **`metadata.json` vs warehouse** – Discovery uses `data_range` on date columns when present. After reseeding BigQuery (especially `02_dml_seed_enriched.sql`), update **`data_range` min/max** in `metadata.json` to match actual data or time-window checks will mislead the model.
 
 When in doubt, read `main.py` around `_ask_stream_generator` and `DataPilotClient.tsx` SSE handlers first.

@@ -122,7 +122,7 @@ npx next dev -p 3001
 
 ## BigQuery sample data (optional)
 
-Scripts under [`backend/bigquery/scripts/`](backend/bigquery/scripts/) can create and load POC tables. See [`backend/bigquery/scripts/README_DATA_MODEL.md`](backend/bigquery/scripts/README_DATA_MODEL.md) for the model and example questions.
+Scripts under [`backend/bigquery/scripts/`](backend/bigquery/scripts/) can create and load POC tables (`DDL/` and `DML/`). See [`backend/bigquery/scripts/README_DATA_MODEL.md`](backend/bigquery/scripts/README_DATA_MODEL.md) for the model and example questions.
 
 ## Limitations
 

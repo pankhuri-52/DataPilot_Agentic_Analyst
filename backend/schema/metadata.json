@@ -1,27 +1,75 @@
 {
   "dataset": "retail_data",
-  "description": "Retail/B2B sales data: products, customers, orders, order_items, sales_daily",
+  "description": "Retail/B2B sales: catalog, customers, reps, orders, fulfillment, returns, marketing attribution, and daily aggregates.",
   "tables": [
     {
+      "name": "brands",
+      "description": "Product brand / manufacturer dimension. One row per brand.",
+      "columns": [
+        {"name": "brand_id", "type": "STRING", "description": "Primary key. Unique brand identifier."},
+        {"name": "name", "type": "STRING", "description": "Brand display name."},
+        {"name": "country", "type": "STRING", "description": "Country of brand headquarters or primary market."},
+        {"name": "created_at", "type": "TIMESTAMP", "description": "When the record was created."}
+      ]
+    },
+    {
+      "name": "sales_reps",
+      "description": "Sales representative dimension. Links to customers for account ownership.",
+      "columns": [
+        {"name": "sales_rep_id", "type": "STRING", "description": "Primary key. Unique sales rep identifier."},
+        {"name": "full_name", "type": "STRING", "description": "Rep full name."},
+        {"name": "email", "type": "STRING", "description": "Work email."},
+        {"name": "region", "type": "STRING", "description": "Rep home region (North, South, East, West)."},
+        {"name": "hired_at", "type": "DATE", "description": "Hire date."},
+        {"name": "created_at", "type": "TIMESTAMP", "description": "When the record was created."}
+      ]
+    },
+    {
+      "name": "warehouses",
+      "description": "Fulfillment warehouse / distribution node.",
+      "columns": [
+        {"name": "warehouse_id", "type": "STRING", "description": "Primary key. Unique warehouse identifier."},
+        {"name": "name", "type": "STRING", "description": "Warehouse name."},
+        {"name": "region", "type": "STRING", "description": "Region served or located (North, South, East, West)."},
+        {"name": "opened_date", "type": "DATE", "description": "Opening date."},
+        {"name": "created_at", "type": "TIMESTAMP", "description": "When the record was created."}
+      ]
+    },
+    {
+      "name": "campaigns",
+      "description": "Marketing campaign with active date range for order attribution.",
+      "columns": [
+        {"name": "campaign_id", "type": "STRING", "description": "Primary key. Campaign identifier."},
+        {"name": "name", "type": "STRING", "description": "Campaign name."},
+        {"name": "channel", "type": "STRING", "description": "Channel (email, paid_search, social, events, display, partner, organic)."},
+        {"name": "start_date", "type": "DATE", "description": "Campaign start (inclusive)."},
+        {"name": "end_date", "type": "DATE", "description": "Campaign end (inclusive)."},
+        {"name": "budget", "type": "NUMERIC", "description": "Planned spend in currency."},
+        {"name": "created_at", "type": "TIMESTAMP", "description": "When the record was created."}
+      ]
+    },
+    {
       "name": "products",
-      "description": "Product dimension. One row per product in the catalog.",
+      "description": "Product dimension. One row per product in the catalog; belongs to a brand.",
       "columns": [
         {"name": "product_id", "type": "STRING", "description": "Primary key. Unique product identifier."},
         {"name": "name", "type": "STRING", "description": "Display name of the product."},
         {"name": "category", "type": "STRING", "description": "Product category (Electronics, Home, Furniture, Office)."},
         {"name": "unit_price", "type": "NUMERIC", "description": "Price per unit in currency."},
-        {"name": "created_at", "type": "TIMESTAMP", "description": "When the record was created."}
+        {"name": "created_at", "type": "TIMESTAMP", "description": "When the record was created."},
+        {"name": "brand_id", "type": "STRING", "description": "Foreign key to brands.brand_id."}
       ]
     },
     {
       "name": "customers",
-      "description": "Customer dimension. One row per B2B customer.",
+      "description": "B2B customer dimension. Assigned to a sales rep; used for region and segment analytics.",
       "columns": [
         {"name": "customer_id", "type": "STRING", "description": "Primary key. Unique customer identifier."},
         {"name": "name", "type": "STRING", "description": "Customer/company name."},
         {"name": "region", "type": "STRING", "description": "Sales region (North, South, East, West)."},
         {"name": "segment", "type": "STRING", "description": "Customer segment (Enterprise, SMB, Startup)."},
-        {"name": "created_at", "type": "TIMESTAMP", "description": "When the record was created."}
+        {"name": "created_at", "type": "TIMESTAMP", "description": "When the record was created."},
+        {"name": "sales_rep_id", "type": "STRING", "description": "Foreign key to sales_reps.sales_rep_id."}
       ]
     },
     {
@@ -30,7 +78,7 @@
       "columns": [
         {"name": "order_id", "type": "STRING", "description": "Primary key. Unique order identifier."},
         {"name": "customer_id", "type": "STRING", "description": "Foreign key to customers.customer_id."},
-        {"name": "order_date", "type": "DATE", "description": "Date the order was placed.", "data_range": {"min": "2024-01-01", "max": "2024-02-15"}},
+        {"name": "order_date", "type": "DATE", "description": "Date the order was placed.", "data_range": {"min": "2024-03-01", "max": "2025-03-01"}},
         {"name": "status", "type": "STRING", "description": "Order status (completed, pending, cancelled)."},
         {"name": "total_amount", "type": "NUMERIC", "description": "Order total in currency."},
         {"name": "created_at", "type": "TIMESTAMP", "description": "When the record was created."}
@@ -38,7 +86,7 @@
     },
     {
       "name": "order_items",
-      "description": "Order line items. One row per product per order; links orders to products.",
+      "description": "Order line items. One row per product line on an order; links orders to products.",
       "columns": [
         {"name": "order_id", "type": "STRING", "description": "Foreign key to orders.order_id."},
         {"name": "product_id", "type": "STRING", "description": "Foreign key to products.product_id."},
@@ -48,10 +96,45 @@
       ]
     },
     {
-      "name": "sales_daily",
-      "description": "Daily sales summary by product and region. Use for fast reporting without joining orders/order_items.",
+      "name": "shipments",
+      "description": "Shipment for an order from a warehouse; carrier and delivery status.",
       "columns": [
-        {"name": "date", "type": "DATE", "description": "Calendar date of sales.", "data_range": {"min": "2024-01-01", "max": "2024-02-15"}},
+        {"name": "shipment_id", "type": "STRING", "description": "Primary key. Shipment identifier."},
+        {"name": "order_id", "type": "STRING", "description": "Foreign key to orders.order_id."},
+        {"name": "warehouse_id", "type": "STRING", "description": "Foreign key to warehouses.warehouse_id."},
+        {"name": "ship_date", "type": "DATE", "description": "Ship date.", "data_range": {"min": "2024-03-02", "max": "2025-03-07"}},
+        {"name": "carrier", "type": "STRING", "description": "Carrier (UPS, FedEx, DHL)."},
+        {"name": "status", "type": "STRING", "description": "Shipment status (delivered, delayed)."},
+        {"name": "created_at", "type": "TIMESTAMP", "description": "When the record was created."}
+      ]
+    },
+    {
+      "name": "return_items",
+      "description": "Product returns / refunds at line level; links to original order and product.",
+      "columns": [
+        {"name": "return_id", "type": "STRING", "description": "Primary key. Return line identifier."},
+        {"name": "order_id", "type": "STRING", "description": "Foreign key to orders.order_id."},
+        {"name": "product_id", "type": "STRING", "description": "Foreign key to products.product_id."},
+        {"name": "return_date", "type": "DATE", "description": "Return processed date.", "data_range": {"min": "2024-03-08", "max": "2025-04-15"}},
+        {"name": "quantity", "type": "INT64", "description": "Units returned."},
+        {"name": "refund_amount", "type": "NUMERIC", "description": "Refund in currency."},
+        {"name": "reason_code", "type": "STRING", "description": "Return reason (defective, changed_mind, not_as_described, duplicate_order)."},
+        {"name": "created_at", "type": "TIMESTAMP", "description": "When the record was created."}
+      ]
+    },
+    {
+      "name": "order_campaigns",
+      "description": "Attribution bridge: which marketing campaign is credited for each order.",
+      "columns": [
+        {"name": "order_id", "type": "STRING", "description": "Foreign key to orders.order_id."},
+        {"name": "campaign_id", "type": "STRING", "description": "Foreign key to campaigns.campaign_id."}
+      ]
+    },
+    {
+      "name": "sales_daily",
+      "description": "Daily sales summary by product and region (excludes cancelled orders in enriched seed).",
+      "columns": [
+        {"name": "date", "type": "DATE", "description": "Calendar date of sales.", "data_range": {"min": "2024-03-01", "max": "2025-03-01"}},
         {"name": "product_id", "type": "STRING", "description": "Foreign key to products.product_id."},
         {"name": "region", "type": "STRING", "description": "Sales region (from customer on the order)."},
         {"name": "units_sold", "type": "INT64", "description": "Total quantity sold that day for this product in this region."},
@@ -60,9 +143,17 @@
     }
   ],
   "relationships": [
+    "products.brand_id -> brands.brand_id",
+    "customers.sales_rep_id -> sales_reps.sales_rep_id",
     "orders.customer_id -> customers.customer_id",
     "order_items.order_id -> orders.order_id",
     "order_items.product_id -> products.product_id",
+    "shipments.order_id -> orders.order_id",
+    "shipments.warehouse_id -> warehouses.warehouse_id",
+    "return_items.order_id -> orders.order_id",
+    "return_items.product_id -> products.product_id",
+    "order_campaigns.order_id -> orders.order_id",
+    "order_campaigns.campaign_id -> campaigns.campaign_id",
     "sales_daily.product_id -> products.product_id"
   ]
 }

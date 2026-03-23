@@ -4,48 +4,47 @@
 
 This is **retail / B2B sales data** for a product company that sells to businesses (B2B). It models:
 
-- **Products** (catalog: Electronics, Home, Furniture, Office)
-- **Customers** (companies by region and segment: Enterprise, SMB (Small and Medium Sized Business), Startup)
-- **Orders** (order header: who bought, when, status, total)
-- **Order line items** (what was bought in each order: product, quantity, price, line total)
-- **Sales daily** (pre-aggregated summary: revenue and units by date × product × region)
+- **Brands** and **products** (catalog with `brand_id`)
+- **Sales reps** and **customers** (accounts with `sales_rep_id`, region, segment)
+- **Orders** and **order line items** (transaction facts)
+- **Warehouses** and **shipments** (fulfillment)
+- **Return lines** (refunds and reasons)
+- **Campaigns** and **order_campaigns** (marketing attribution)
+- **Sales daily** (pre-aggregated revenue and units by date × product × region)
 
-So: **who bought what, when, for how much**, plus a daily rollup for fast reporting.
+So: **who sold, who bought, what was shipped, what was returned, which campaign drove the order**, plus a daily rollup for fast reporting.
 
 ---
 
-## Table relationships (ER)
+## Script layout
+
+| Path | Purpose |
+|------|---------|
+| `DDL/01_ddl.sql` | Base tables: `products`, `customers`, `orders`, `order_items`, `sales_daily` |
+| `DDL/02_ddl_new_tables.sql` | Extended model: `brands`, `sales_reps`, `warehouses`, `campaigns`, `shipments`, `return_items`, `order_campaigns`; adds `products.brand_id`, `customers.sales_rep_id` |
+| `DML/01_inserts.sql` | Small static seed for the **base** model only (no extension columns) |
+| `DML/02_dml_seed_enriched.sql` | Full refresh: ~1,200 orders, ~1 year of dates, all tables (run after both DDL scripts) |
+
+Replace `agile-charger-488911-e6.retail_data` in every file with your **project** and **dataset** before running.
+
+**Run order**
+
+1. `DDL/01_ddl.sql`
+2. `DDL/02_ddl_new_tables.sql` (safe to re-run if `ADD COLUMN IF NOT EXISTS` is supported; otherwise run once)
+3. Either `DML/01_inserts.sql` **or** `DML/02_dml_seed_enriched.sql` — not both on the same dataset if you want a clean state (enriched script deletes all rows first).
+
+---
+
+## Table relationships (high level)
 
 ```
-customers (1) ──────────< orders (N)
-    │                         │
-    │                         │ order_id
-    │                         ▼
-    │                    order_items (N)
-    │                         │
-    │                         │ product_id
-    ▼                         ▼
-  region              products (1)
-  (used in                  │
-   sales_daily)              │
-                             ▼
-                    sales_daily (aggregate: date, product_id, region)
+brands (1) ──< products (1) ──< order_items (N) >── (1) orders >── (1) customers >── (1) sales_reps
+                                    │                    │
+                                    │                    ├──< shipments >── warehouses
+                                    │                    ├──< order_campaigns >── campaigns
+                                    │                    └──< return_items
+                                    └── sales_daily (aggregate by date, product_id, region)
 ```
-
-- **customers** — dimension. One row per customer.  
-  **orders.customer_id** → **customers.customer_id** (each order belongs to one customer).
-
-- **orders** — order header. One row per order.  
-  **order_items.order_id** → **orders.order_id** (each order has one or more line items).
-
-- **products** — dimension. One row per product.  
-  **order_items.product_id** → **products.product_id** (each line item references one product).
-
-- **order_items** — fact (transaction detail). One row per product per order.  
-  Joining orders + order_items + customers gives full context (customer region, segment, product category, etc.).
-
-- **sales_daily** — derived aggregate. One row per (date, product_id, region).  
-  Built from orders + order_items + customers; use for fast “revenue/units by day, product, region” without joining the fact table.
 
 ---
 
@@ -53,24 +52,16 @@ customers (1) ──────────< orders (N)
 
 | Question | Tables / approach |
 |----------|-------------------|
-| Revenue by region | `sales_daily` by region, or orders + customers |
-| Revenue by customer segment (Enterprise vs SMB vs Startup) | orders + customers, group by segment |
-| Top products by revenue or units | order_items + products, or sales_daily + products |
-| Revenue by category | order_items + products, group by category |
-| Revenue by month/quarter | orders or sales_daily, group by date |
-| Average order value (AOV) by segment or region | orders + customers, AVG(total_amount) |
-| Which customers ordered most / are most valuable | orders + customers, SUM(total_amount), COUNT(orders) |
-| Product mix per order (basket analysis) | order_items + orders, group by order_id |
-| Pending vs completed orders | orders where status = 'pending' vs 'completed' |
-| Daily trend: units and revenue by product and region | sales_daily |
+| Revenue by region / segment | `orders` + `customers`, or `sales_daily` + `customers` via product path |
+| Revenue by brand | `order_items` + `products` + `brands` |
+| Sales by rep | `customers` + `sales_reps` + `orders` |
+| Fulfillment: carrier, delays | `shipments` + `warehouses` + `orders` |
+| Return rate, refunds by reason | `return_items` + `products` / `orders` |
+| Campaign-attributed revenue | `order_campaigns` + `campaigns` + `orders` |
+| Daily trend without heavy joins | `sales_daily` |
 
 ---
 
-## How to use the scripts
+## Application metadata
 
-1. In BigQuery, create a dataset (e.g. `customer_data`) in your project.
-2. Replace `YOUR_PROJECT_ID` and `YOUR_DATASET_ID` in the SQL files with your project and dataset.
-3. Run **01_ddl.sql** (full DDL) to create all tables.
-4. Run **02_inserts.sql** in order: products → customers → orders → order_items → sales_daily (the last is an INSERT...SELECT from the others).
-
-After that, you can run the business queries above (and more) in the BigQuery console or from your app.
+The LangGraph agents read **`backend/schema/metadata.json`**. After loading BigQuery, keep **date `data_range`** values in that file aligned with your actual min/max dates (the enriched seed targets roughly **2024-03-01** through **2025-03-01** on `orders.order_date`).

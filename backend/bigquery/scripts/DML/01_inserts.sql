@@ -1,9 +1,10 @@
 -- =============================================================================
--- DataPilot POC – INSERTs (run in BigQuery Console after 01_ddl.sql)
+-- DataPilot POC – INSERTs (run in BigQuery Console after DDL/01_ddl.sql)
 -- =============================================================================
 -- 1. Replace YOUR_PROJECT_ID and YOUR_DATASET_ID in every statement.
 -- 2. Run in this order: products → customers → orders → order_items → sales_daily.
 --    (sales_daily is an INSERT...SELECT from the other tables; run it last.)
+-- 3. If you use the extended model (DDL/02_ddl_new_tables.sql), use DML/02_dml_seed_enriched.sql instead.
 -- =============================================================================
 
 -- -----------------------------------------------------------------------------

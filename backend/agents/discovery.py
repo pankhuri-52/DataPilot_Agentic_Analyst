@@ -36,10 +36,15 @@ Your job:
 Column mapping hints:
 - revenue, total_amount, line_total -> orders.total_amount, order_items.line_total, sales_daily.revenue
 - units_sold, quantity -> order_items.quantity, sales_daily.units_sold
-- region, segment -> customers.region, customers.segment
+- region, segment -> customers.region, customers.segment; sales_reps.region; warehouses.region
 - category -> products.category
-- date, order_date -> orders.order_date, sales_daily.date
+- brand -> brands.name, products.brand_id
+- date, order_date -> orders.order_date, sales_daily.date, shipments.ship_date, return_items.return_date
 - product, product_id -> products, order_items.product_id
+- rep, sales rep -> sales_reps.full_name, customers.sales_rep_id
+- refund, returns -> return_items.refund_amount, return_items.reason_code
+- campaign, marketing channel -> campaigns.name, campaigns.channel, order_campaigns
+- warehouse, carrier, fulfillment -> shipments, warehouses, shipments.carrier
 """
 
 
