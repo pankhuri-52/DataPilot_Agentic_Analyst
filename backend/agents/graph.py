@@ -10,12 +10,20 @@ except ImportError:
     from langgraph.checkpoint.memory import InMemorySaver as MemorySaver
 
 from agents.state import DataPilotState
+from agents.query_kb import run_query_kb
 from agents.planner import run_planner
 from agents.discovery import run_discovery
 from agents.optimizer import run_optimizer
 from agents.executor import run_executor
 from agents.validator import run_validator
 from agents.visualization import run_visualization
+
+
+def route_after_query_kb(state: DataPilotState) -> Literal["planner", "executor"]:
+    """After KB node: Adapt path jumps to executor; otherwise planner."""
+    if state.get("from_query_cache_adapt") and state.get("sql"):
+        return "executor"
+    return "planner"
 
 
 def route_after_planner(state: DataPilotState) -> Literal["discovery", "__end__"]:
@@ -45,6 +53,7 @@ def build_graph():
     """Build and compile the DataPilot agent graph with checkpointer."""
     graph = StateGraph(DataPilotState)
 
+    graph.add_node("query_kb", run_query_kb)
     graph.add_node("planner", run_planner)
     graph.add_node("discovery", run_discovery)
     graph.add_node("optimizer", run_optimizer)
@@ -52,8 +61,13 @@ def build_graph():
     graph.add_node("validator", run_validator)
     graph.add_node("visualization", run_visualization)
 
-    graph.set_entry_point("planner")
+    graph.set_entry_point("query_kb")
 
+    graph.add_conditional_edges(
+        "query_kb",
+        route_after_query_kb,
+        {"planner": "planner", "executor": "executor"},
+    )
     graph.add_conditional_edges("planner", route_after_planner, {"discovery": "discovery", "__end__": END})
     graph.add_conditional_edges("discovery", route_after_discovery, {"optimizer": "optimizer", "__end__": END})
     graph.add_conditional_edges("optimizer", route_after_optimizer, {"executor": "executor", "__end__": END})

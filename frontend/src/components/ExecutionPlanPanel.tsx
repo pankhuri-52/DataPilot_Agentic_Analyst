@@ -459,12 +459,17 @@ export function ExecutionPlanPanel({
     pendingInterrupt?.reason === "execute_query" ||
     pendingInterrupt?.data?.reason === "execute_query";
 
+  const awaitingQueryCache =
+    pendingInterrupt?.reason === "query_cache_hit" ||
+    pendingInterrupt?.data?.reason === "query_cache_hit";
+
   const activePhase: ExecutionPhase = useMemo(() => {
     if (awaitingExecute) return "optimizer";
+    if (awaitingQueryCache) return "planner";
     if (isLoading && liveTrace.length === 0) return "planner";
     if (lastTraceAgent) return lastTraceAgent;
     return "planner";
-  }, [awaitingExecute, isLoading, liveTrace.length, lastTraceAgent]);
+  }, [awaitingExecute, awaitingQueryCache, isLoading, liveTrace.length, lastTraceAgent]);
 
   const fullPipelineComplete =
     isTurnComplete && lastTraceAgent === "visualization";
@@ -483,6 +488,10 @@ export function ExecutionPlanPanel({
 
   function stepStatus(phase: ExecutionPhase): PhaseStepStatus {
     const pi = phaseIdx(phase);
+    if (awaitingQueryCache) {
+      if (phase === "planner") return "awaiting";
+      return "pending";
+    }
     if (awaitingExecute) {
       if (phase === "optimizer") return "awaiting";
       if (pi < phaseIdx("optimizer")) return "done";
@@ -577,7 +586,9 @@ export function ExecutionPlanPanel({
                 const hasTimeline =
                   phaseEntries.length > 0 ||
                   (status === "active" && isLoading && ph === activePhase) ||
-                  (status === "awaiting" && ph === "optimizer" && awaitingExecute);
+                  (status === "awaiting" &&
+                    ((ph === "optimizer" && awaitingExecute) ||
+                      (ph === "planner" && awaitingQueryCache)));
 
                 const detailRaw = step.detail?.trim();
                 const compareLine = hasTimeline

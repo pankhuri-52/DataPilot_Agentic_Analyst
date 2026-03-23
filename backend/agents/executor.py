@@ -148,9 +148,14 @@ def run_executor(state: dict) -> dict:
             sql = re.sub(r"\n?```$", "", sql)
         sql = sql.strip()
     else:
+        src = (
+            "knowledge base"
+            if state.get("from_query_cache_adapt")
+            else "Optimizer"
+        )
         append_trace(
             trace,
-            TraceEntry(agent="executor", status="info", message="Using SQL from Optimizer...").model_dump(),
+            TraceEntry(agent="executor", status="info", message=f"Using SQL from {src}...").model_dump(),
         )
         schema = load_schema()
 

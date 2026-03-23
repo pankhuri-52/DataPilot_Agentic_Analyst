@@ -13,6 +13,7 @@
 In the Supabase SQL Editor, run the migrations in order:
 1. `migrations/001_conversations.sql` – creates `conversations` and `messages` tables, indexes, RLS.
 2. `migrations/002_chat_schema_docs.sql` – adds schema comments (optional).
+3. `migrations/003_query_kb.sql` – RPCs `match_query_kb` and `insert_query_kb_entry` for the query knowledge base. Requires the `vector` extension and a `public.query_kb_entries` table whose `embedding` column size matches `GEMINI_EMBEDDING_DIMENSION` (default **768**).
 
 Or use the Supabase CLI:
 

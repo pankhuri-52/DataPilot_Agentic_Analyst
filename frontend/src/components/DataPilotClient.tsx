@@ -19,6 +19,7 @@ import {
 } from "@/contexts/ChatContext";
 
 import { API_BASE, fetchWithRetry } from "@/lib/httpClient";
+import { formatExecutedAtLabel } from "@/lib/formatExecutedAt";
 
 interface TraceEntry {
   agent: string;
@@ -143,7 +144,11 @@ export function DataPilotClient() {
     return "";
   }
 
-  async function handleContinue(message: Message, approved = true) {
+  type ContinueOpts =
+    | boolean
+    | { queryCache: "full_pipeline" | "use_cached_sql" };
+
+  async function handleContinue(message: Message, opts: ContinueOpts = true) {
     const threadId = message.pendingInterrupt?.thread_id;
     if (!threadId) return;
     if (continueInFlightRef.current || loading) return;
@@ -167,18 +172,27 @@ export function DataPilotClient() {
 
     const continueConvId = message.conversationId ?? currentConversationId ?? undefined;
 
+    const continueBody: Record<string, unknown> = {
+      thread_id: threadId,
+      conversation_id: continueConvId,
+      original_query: precedingUserContent(convKey, assistantMessageId) || undefined,
+    };
+    if (typeof opts === "object" && opts !== null && "queryCache" in opts) {
+      continueBody.resume = {
+        kind: "query_cache_hit",
+        action: opts.queryCache,
+      };
+    } else {
+      continueBody.approved = typeof opts === "boolean" ? opts : true;
+    }
+
     try {
       const res = await fetchWithRetry(
         `${API_BASE}/ask/continue`,
         {
           method: "POST",
           headers,
-          body: JSON.stringify({
-            thread_id: threadId,
-            conversation_id: continueConvId,
-            approved,
-            original_query: precedingUserContent(convKey, assistantMessageId) || undefined,
-          }),
+          body: JSON.stringify(continueBody),
         },
         { logLabel: "POST /ask/continue (stream)" }
       );
@@ -693,13 +707,125 @@ export function DataPilotClient() {
                       <Alert className="rounded-lg border-primary/40 bg-primary/5">
                         <AlertTitle>Action required</AlertTitle>
                         <AlertDescription>
-                          The run pauses here until you approve running the query against your
-                          warehouse. Review SQL and estimated cost (if shown), then choose Yes or
-                          No.
+                          {(message.pendingInterrupt.reason === "query_cache_hit" ||
+                            message.pendingInterrupt.data?.reason === "query_cache_hit")
+                            ? "We found a similar question you asked before. Review the saved SQL and sample results, then choose Re-run (full new analysis) or Adapt (re-run the saved query on your warehouse)."
+                            : "The run pauses here until you approve running the query against your warehouse. Review SQL and estimated cost (if shown), then choose Yes or No."}
                         </AlertDescription>
                       </Alert>
                       <div className="rounded-lg border border-primary/30 bg-accent/20 p-4 space-y-3">
-                        {(message.pendingInterrupt.reason === "execute_query" ||
+                        {(message.pendingInterrupt.reason === "query_cache_hit" ||
+                          message.pendingInterrupt.data?.reason === "query_cache_hit") ? (
+                          <>
+                            <p className="text-xs font-medium">Similar question in your knowledge base</p>
+                            <p className="text-xs text-muted-foreground leading-relaxed">
+                              We&apos;ve answered something similar before. Here&apos;s the cached SQL
+                              + result sample
+                              {(() => {
+                                const iso =
+                                  (message.pendingInterrupt.data?.executed_at as string | undefined) ||
+                                  "";
+                                const label = formatExecutedAtLabel(iso);
+                                return label ? ` from ${label}` : "";
+                              })()}
+                              . <span className="font-medium">Re-run</span> runs the full analysis
+                              pipeline; <span className="font-medium">Adapt</span> reuses this SQL
+                              against your warehouse (skips planner / discovery / optimizer).
+                            </p>
+                            {(() => {
+                              const intr = message.pendingInterrupt!;
+                              const matched =
+                                (intr.data?.matched_question as string | undefined)?.trim() || "";
+                              const sim = intr.data?.similarity as number | undefined;
+                              return (
+                                <>
+                                  {matched && (
+                                    <p className="text-[11px] text-muted-foreground">
+                                      Matched question: <span className="text-foreground">{matched}</span>
+                                      {sim != null && !Number.isNaN(Number(sim)) && (
+                                        <span className="ml-2">· similarity {(Number(sim)).toFixed(2)}</span>
+                                      )}
+                                    </p>
+                                  )}
+                                </>
+                              );
+                            })()}
+                            {(() => {
+                              const intr = message.pendingInterrupt!;
+                              const sql =
+                                intr.sql ?? (intr.data?.sql as string | undefined);
+                              const preview = intr.data?.result_preview as
+                                | { rows?: Record<string, unknown>[]; row_count?: number }
+                                | undefined;
+                              const rows = Array.isArray(preview?.rows) ? preview.rows : [];
+                              const rowCount =
+                                typeof preview?.row_count === "number" ? preview.row_count : rows.length;
+                              return (
+                                <>
+                                  {sql && (
+                                    <pre className="text-[11px] overflow-x-auto rounded bg-muted/50 p-2 max-h-32">
+                                      {sql}
+                                    </pre>
+                                  )}
+                                  {rows.length > 0 && (
+                                    <div className="space-y-1">
+                                      <p className="text-[11px] text-muted-foreground">
+                                        Sample results ({rowCount} row{rowCount === 1 ? "" : "s"} total)
+                                      </p>
+                                      <div className="max-h-28 overflow-auto rounded border border-border/60 text-[10px]">
+                                        <table className="w-full border-collapse">
+                                          <thead>
+                                            <tr className="border-b bg-muted/30">
+                                              {Object.keys(rows[0]).map((k) => (
+                                                <th key={k} className="px-2 py-1 text-left font-medium">
+                                                  {k}
+                                                </th>
+                                              ))}
+                                            </tr>
+                                          </thead>
+                                          <tbody>
+                                            {rows.slice(0, 5).map((row, i) => (
+                                              <tr key={i} className="border-b border-border/40">
+                                                {Object.values(row).map((v, j) => (
+                                                  <td key={j} className="px-2 py-0.5 max-w-[120px] truncate">
+                                                    {v === null || v === undefined ? "" : String(v)}
+                                                  </td>
+                                                ))}
+                                              </tr>
+                                            ))}
+                                          </tbody>
+                                        </table>
+                                      </div>
+                                    </div>
+                                  )}
+                                  <div className="flex flex-wrap gap-2 pt-1">
+                                    <Button
+                                      size="sm"
+                                      className="cursor-pointer"
+                                      onClick={() =>
+                                        message.pendingInterrupt &&
+                                        handleContinue(message, { queryCache: "full_pipeline" })
+                                      }
+                                    >
+                                      Re-run
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="secondary"
+                                      className="cursor-pointer"
+                                      onClick={() =>
+                                        message.pendingInterrupt &&
+                                        handleContinue(message, { queryCache: "use_cached_sql" })
+                                      }
+                                    >
+                                      Adapt
+                                    </Button>
+                                  </div>
+                                </>
+                              );
+                            })()}
+                          </>
+                        ) : (message.pendingInterrupt.reason === "execute_query" ||
                           message.pendingInterrupt.data?.reason === "execute_query") ? (
                           <>
                             <p className="text-xs font-medium">Query ready to execute</p>
@@ -753,23 +879,28 @@ export function DataPilotClient() {
                             Confirmation required to continue.
                           </p>
                         )}
-                        <div className="flex gap-2">
-                          <Button
-                            size="sm"
-                            className="cursor-pointer"
-                            onClick={() => message.pendingInterrupt && handleContinue(message, true)}
-                          >
-                            Yes
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="cursor-pointer"
-                            onClick={() => message.pendingInterrupt && handleContinue(message, false)}
-                          >
-                            No
-                          </Button>
-                        </div>
+                        {!(
+                          message.pendingInterrupt.reason === "query_cache_hit" ||
+                          message.pendingInterrupt.data?.reason === "query_cache_hit"
+                        ) && (
+                          <div className="flex gap-2">
+                            <Button
+                              size="sm"
+                              className="cursor-pointer"
+                              onClick={() => message.pendingInterrupt && handleContinue(message, true)}
+                            >
+                              Yes
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="cursor-pointer"
+                              onClick={() => message.pendingInterrupt && handleContinue(message, false)}
+                            >
+                              No
+                            </Button>
+                          </div>
+                        )}
                       </div>
                     </div>
                   )}

@@ -19,6 +19,7 @@ The default **retail / B2B POC model** includes dimensions and facts beyond core
 | `backend/agents/state.py` | `DataPilotState`, Pydantic models (`AnalysisPlan`, …) |
 | `backend/db/factory.py` | Picks BigQuery vs Postgres connector |
 | `backend/supabase_service.py` | Supabase **auth** (anon key) + **chat** persistence (service role), retries on transient I/O |
+| `backend/query_kb_store.py` + `backend/agents/query_kb.py` | Optional **query knowledge base** (pgvector + `gemini-embedding-001`): match before planner, interrupt for Re-run vs Adapt; see `supabase_migrations/migrations/003_query_kb.sql` |
 | `backend/core/retry.py` | Shared exponential backoff for Supabase + Gemini invokes |
 | `backend/core/logging_config.py` | `setup_logging()` — `LOG_LEVEL` env (default INFO) |
 | `frontend/src/lib/httpClient.ts` | `API_BASE`, `fetchWithRetry` (backoff for DataPilot API calls) |

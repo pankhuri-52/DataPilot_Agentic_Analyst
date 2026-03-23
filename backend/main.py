@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import uuid
+from datetime import datetime, timezone
 from fastapi import FastAPI, HTTPException, Body, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -560,6 +561,64 @@ def _build_ask_response(state: dict) -> dict:
     }
 
 
+def _maybe_index_query_kb(last_state: dict, user_query: str) -> None:
+    """After a successful full pipeline, embed and store query + SQL for future matches."""
+    if last_state.get("from_query_cache_adapt"):
+        return
+    if not last_state.get("validation_ok"):
+        return
+    sql = last_state.get("sql")
+    if not sql or not str(sql).strip():
+        return
+    plan = last_state.get("plan")
+    if not isinstance(plan, dict):
+        return
+    q = (user_query or "").strip()
+    if not q:
+        return
+    try:
+        from agents.query_kb_helpers import (
+            build_index_text,
+            guess_columns_from_sql,
+            result_preview_payload,
+            schema_fingerprint_from_schema,
+        )
+        from agents.schema_utils import load_schema
+        from db.factory import get_connector
+        from embeddings import embed_text
+        from query_kb_store import insert_kb_entry
+
+        connector = get_connector()
+        if not connector:
+            return
+        dialect = connector.dialect
+        schema = load_schema()
+        fingerprint = schema_fingerprint_from_schema(schema)
+        tables_used = last_state.get("tables_used") or []
+        if not isinstance(tables_used, list):
+            tables_used = []
+        tables_used = [str(t) for t in tables_used]
+        cols = guess_columns_from_sql(str(sql))
+        index_text = build_index_text(q, tables_used, cols)
+        doc_vec = embed_text(index_text, task_type="RETRIEVAL_DOCUMENT")
+        preview = result_preview_payload(last_state.get("raw_results"))
+        insert_kb_entry(
+            executed_at=datetime.now(timezone.utc),
+            index_text=index_text,
+            embedding=doc_vec,
+            user_question=q,
+            sql=str(sql).strip(),
+            dialect=dialect,
+            schema_fingerprint=fingerprint,
+            plan_snapshot=plan,
+            tables_used=tables_used,
+            columns_used=cols,
+            result_preview=preview,
+        )
+    except Exception:
+        logger.exception("Query KB indexing failed (non-fatal)")
+
+
 def _merge_interrupt_client(state: dict, payload: dict) -> dict:
     """Merge LangGraph interrupt payload with checkpoint state so sql/cost are always exposed."""
     p = dict(payload) if isinstance(payload, dict) else {}
@@ -671,6 +730,8 @@ def ask(
         response = _build_ask_response(result)
         response["thread_id"] = thread_id
 
+        _maybe_index_query_kb(result, query)
+
         if user:
             saved_conv_id = _save_ask_messages(user["id"], conversation_id, query, response)
             if saved_conv_id:
@@ -697,7 +758,7 @@ async def _ask_stream_generator(
     conversation_id: str | None,
     thread_id: str,
     conversation_history: list[dict] | None = None,
-    resume: bool | None = None,
+    resume: bool | dict | None = None,
     persist_query: str | None = None,
 ):
     """Async generator that yields SSE events for real-time agent progress. Handles interrupts."""
@@ -822,6 +883,7 @@ async def _ask_stream_generator(
                     )
                 if saved_conv_id:
                     response["conversation_id"] = saved_conv_id
+            _maybe_index_query_kb(last_state, (query or "").strip() or (persist_query or "").strip())
             yield f"data: {json.dumps({'type': 'complete', 'response': response})}\n\n"
     except Exception as e:
         err_msg = str(e)
@@ -876,10 +938,15 @@ async def ask_continue(
     """
     Resume graph execution after an interrupt (table approval or execute confirmation).
     Pass thread_id from the interrupt event. Streams from the resume point.
+    For query-cache hits, pass resume: { "kind": "query_cache_hit", "action": "full_pipeline" | "use_cached_sql" }.
     """
     thread_id = (body or {}).get("thread_id", "").strip()
     conversation_id = (body or {}).get("conversation_id")
-    approved = (body or {}).get("approved", True)
+    resume_payload = (body or {}).get("resume")
+    if resume_payload is not None:
+        resume_val: bool | dict = resume_payload
+    else:
+        resume_val = (body or {}).get("approved", True)
     original_query = (body or {}).get("original_query", "").strip()
     if not thread_id:
         raise HTTPException(status_code=400, detail="thread_id is required")
@@ -894,7 +961,7 @@ async def ask_continue(
                 conversation_id,
                 thread_id,
                 conversation_history=history,
-                resume=approved,
+                resume=resume_val,
                 persist_query=original_query or None,
             ),
             media_type="text/event-stream",

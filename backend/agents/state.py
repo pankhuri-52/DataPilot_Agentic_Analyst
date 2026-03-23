@@ -79,3 +79,4 @@ class DataPilotState(TypedDict, total=False):
     trace: list[dict[str, Any]]
     data_range: Optional[dict[str, Any]]  # {"min": "YYYY-MM-DD", "max": "YYYY-MM-DD", "table": "...", "column": "..."}
     empty_result_reason: Optional[str]  # Contextual explanation when query returns 0 rows
+    from_query_cache_adapt: Optional[bool]  # True when user chose Adapt (reuse cached SQL path)
