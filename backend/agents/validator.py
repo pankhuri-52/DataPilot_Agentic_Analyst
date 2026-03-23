@@ -2,6 +2,7 @@
 Validation Agent – sanity checks on query results.
 """
 from agents.state import TraceEntry
+from agents.trace_stream import append_trace
 
 
 def run_validator(state: dict) -> dict:
@@ -9,15 +10,20 @@ def run_validator(state: dict) -> dict:
     raw_results = state.get("raw_results")
     trace = state.get("trace", [])
 
-    trace.append(
+    append_trace(
+        trace,
         TraceEntry(agent="validator", status="info", message="Validating query results...").model_dump()
     )
 
     if raw_results is None:
-        trace.append(TraceEntry(agent="validator", status="info", message="No results to validate").model_dump())
+        append_trace(
+            trace,
+            TraceEntry(agent="validator", status="info", message="No results to validate").model_dump(),
+        )
         return {"validation_ok": False, "trace": trace}
 
-    trace.append(
+    append_trace(
+        trace,
         TraceEntry(agent="validator", status="info", message="Checking result schema consistency...").model_dump()
     )
 
@@ -39,13 +45,14 @@ def run_validator(state: dict) -> dict:
                 issues.append(f"Row {i} has inconsistent columns")
                 break
 
-    trace.append(
+    append_trace(
+        trace,
         TraceEntry(
             agent="validator",
             status="success" if validation_ok else "error",
             message="Validation passed" if validation_ok else "; ".join(issues),
             output={"validation_ok": validation_ok, "row_count": len(raw_results), "issues": issues},
-        ).model_dump()
+        ).model_dump(),
     )
 
     return {"validation_ok": validation_ok, "trace": trace}

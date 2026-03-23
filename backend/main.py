@@ -725,9 +725,37 @@ async def _ask_stream_generator(
         else:
             input_data = {"query": query, "trace": [], "conversation_history": history}
 
-        async for chunk in graph.astream(input_data, config=config, stream_mode="values"):
+        # "custom" streams each trace line as agents append (LangGraph get_stream_writer);
+        # "values" yields full state after each node (fallback + interrupt handling).
+        async for raw in graph.astream(
+            input_data, config=config, stream_mode=["values", "custom"]
+        ):
+            if isinstance(raw, tuple) and len(raw) == 2:
+                mode, data = raw
+                if mode == "custom":
+                    if isinstance(data, dict) and data.get("kind") == "trace_progress":
+                        entry = data.get("entry")
+                        if isinstance(entry, dict):
+                            event = {
+                                "type": "progress",
+                                "agent": entry.get("agent", ""),
+                                "trace_entry": entry,
+                            }
+                            yield f"data: {json.dumps(event)}\n\n"
+                            prev_trace_len += 1
+                    continue
+                if mode == "values":
+                    chunk = data
+                else:
+                    continue
+            else:
+                chunk = raw
+
+            if not isinstance(chunk, dict):
+                continue
+
             # Check for interrupt (chunk may be dict with __interrupt__)
-            interrupt_data = chunk.get("__interrupt__") if isinstance(chunk, dict) else None
+            interrupt_data = chunk.get("__interrupt__")
             if interrupt_data:
                 first = interrupt_data[0] if interrupt_data else None
                 payload = first.value if first and hasattr(first, "value") else (first or {})
@@ -749,7 +777,8 @@ async def _ask_stream_generator(
                 return
 
             last_state = chunk
-            trace = (chunk.get("trace") or []) if isinstance(chunk, dict) else []
+            trace = chunk.get("trace") or []
+            # Catch-up for invoke() / tests without custom stream, or any missed lines
             for i in range(prev_trace_len, len(trace)):
                 entry = trace[i]
                 event = {"type": "progress", "agent": entry.get("agent", ""), "trace_entry": entry}

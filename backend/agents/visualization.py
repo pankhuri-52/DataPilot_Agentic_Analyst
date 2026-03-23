@@ -4,6 +4,7 @@ Visualization & Explanation Agent – chart spec and natural language summary.
 from pydantic import BaseModel, Field
 from llm import get_gemini, invoke_with_retry
 from agents.state import TraceEntry
+from agents.trace_stream import append_trace
 
 
 class VisualizationOutput(BaseModel):
@@ -90,12 +91,16 @@ def run_visualization(state: dict) -> dict:
     data_range = state.get("data_range")
     empty_result_reason = state.get("empty_result_reason")
 
-    trace.append(
+    append_trace(
+        trace,
         TraceEntry(agent="visualization", status="info", message="Preparing chart and explanation...").model_dump()
     )
 
     if not raw_results:
-        trace.append(TraceEntry(agent="visualization", status="info", message="No results to visualize").model_dump())
+        append_trace(
+            trace,
+            TraceEntry(agent="visualization", status="info", message="No results to visualize").model_dump(),
+        )
         explanation = "No data was returned for this query."
         answer_summary = explanation
         follow_up: list[str] = []
@@ -138,7 +143,8 @@ def run_visualization(state: dict) -> dict:
             "empty_result_reason": empty_result_reason,
         }
 
-    trace.append(
+    append_trace(
+        trace,
         TraceEntry(agent="visualization", status="info", message="Choosing chart type and generating explanation...").model_dump()
     )
 
@@ -171,13 +177,14 @@ def run_visualization(state: dict) -> dict:
         raw_fu = result_dict.get("follow_up_suggestions") or []
         follow_up = [str(x) for x in raw_fu if x][:5]
 
-        trace.append(
+        append_trace(
+            trace,
             TraceEntry(
                 agent="visualization",
                 status="success",
                 message="Chart spec and explanation generated",
                 output={"chart_type": chart_spec["chart_type"]},
-            ).model_dump()
+            ).model_dump(),
         )
 
         return {
@@ -188,7 +195,10 @@ def run_visualization(state: dict) -> dict:
             "trace": trace,
         }
     except Exception as e:
-        trace.append(TraceEntry(agent="visualization", status="error", message=str(e)).model_dump())
+        append_trace(
+            trace,
+            TraceEntry(agent="visualization", status="error", message=str(e)).model_dump(),
+        )
         err_expl = f"Here are the results. (Visualization error: {e})"
         return {
             "chart_spec": {"chart_type": "table", "title": "Results", "x_field": None, "y_field": None},

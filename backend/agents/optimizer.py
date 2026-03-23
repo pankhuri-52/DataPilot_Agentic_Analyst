@@ -10,6 +10,7 @@ from langgraph.types import interrupt
 from llm import get_gemini, invoke_with_retry
 from agents.state import TraceEntry
 from agents.schema_utils import load_schema
+from agents.trace_stream import append_trace
 
 
 FORBIDDEN_SQL_PATTERNS = re.compile(
@@ -65,17 +66,24 @@ def run_optimizer(state: dict) -> dict:
     data_feasibility = state.get("data_feasibility", "none")
     trace = state.get("trace", [])
 
-    trace.append(
+    append_trace(
+        trace,
         TraceEntry(agent="optimizer", status="info", message="Generating SQL from analysis plan...").model_dump()
     )
 
     if data_feasibility == "none":
-        trace.append(TraceEntry(agent="optimizer", status="info", message="Skipped – no feasible data").model_dump())
+        append_trace(
+            trace,
+            TraceEntry(agent="optimizer", status="info", message="Skipped – no feasible data").model_dump(),
+        )
         return {"trace": trace}
 
     effective_plan = nearest_plan if data_feasibility == "partial" and nearest_plan else plan
     if not effective_plan:
-        trace.append(TraceEntry(agent="optimizer", status="error", message="No plan available").model_dump())
+        append_trace(
+            trace,
+            TraceEntry(agent="optimizer", status="error", message="No plan available").model_dump(),
+        )
         return {"trace": trace}
 
     try:
@@ -85,7 +93,10 @@ def run_optimizer(state: dict) -> dict:
         connector = None
 
     if not connector:
-        trace.append(TraceEntry(agent="optimizer", status="error", message="No database configured.").model_dump())
+        append_trace(
+            trace,
+            TraceEntry(agent="optimizer", status="error", message="No database configured.").model_dump(),
+        )
         return {"trace": trace}
 
     schema = load_schema()
@@ -125,11 +136,15 @@ def run_optimizer(state: dict) -> dict:
         sql = sql.strip()
 
         if FORBIDDEN_SQL_PATTERNS.search(sql):
-            trace.append(TraceEntry(agent="optimizer", status="error", message="Generated SQL contains forbidden operations").model_dump())
+            append_trace(
+                trace,
+                TraceEntry(agent="optimizer", status="error", message="Generated SQL contains forbidden operations").model_dump(),
+            )
             return {"trace": trace}
 
-        trace.append(
-            TraceEntry(agent="optimizer", status="info", message="SQL generated, validating...").model_dump()
+        append_trace(
+            trace,
+            TraceEntry(agent="optimizer", status="info", message="SQL generated, validating...").model_dump(),
         )
 
         bytes_scanned = None
@@ -137,16 +152,20 @@ def run_optimizer(state: dict) -> dict:
         if dialect == "bigquery" and hasattr(connector, "dry_run_estimate"):
             try:
                 bytes_scanned, estimated_cost = connector.dry_run_estimate(sql)
-                trace.append(
+                append_trace(
+                    trace,
                     TraceEntry(
                         agent="optimizer",
                         status="info",
                         message=f"Dry run: ~{bytes_scanned / (1024**2):.2f} MB, ~${estimated_cost:.6f}",
                         output={"bytes_scanned": bytes_scanned, "estimated_cost": estimated_cost},
-                    ).model_dump()
+                    ).model_dump(),
                 )
             except Exception as e:
-                trace.append(TraceEntry(agent="optimizer", status="info", message=f"Dry run skipped: {e}").model_dump())
+                append_trace(
+                    trace,
+                    TraceEntry(agent="optimizer", status="info", message=f"Dry run skipped: {e}").model_dump(),
+                )
 
         # Interrupt: ask user to approve execution
         skip_hil = os.getenv("DATAPILOT_SKIP_INTERRUPTS", "").strip().lower() in ("1", "true", "yes")
@@ -163,11 +182,15 @@ def run_optimizer(state: dict) -> dict:
             approved = interrupt(interrupt_payload)
 
         if not approved:
-            trace.append(TraceEntry(agent="optimizer", status="info", message="User declined to execute").model_dump())
+            append_trace(
+                trace,
+                TraceEntry(agent="optimizer", status="info", message="User declined to execute").model_dump(),
+            )
             return {"trace": trace}
 
-        trace.append(
-            TraceEntry(agent="optimizer", status="success", message="User approved – proceeding to execution").model_dump()
+        append_trace(
+            trace,
+            TraceEntry(agent="optimizer", status="success", message="User approved – proceeding to execution").model_dump(),
         )
 
         update = {"sql": sql, "trace": trace}
@@ -183,5 +206,8 @@ def run_optimizer(state: dict) -> dict:
         err_str = str(e)
         if "Interrupt" in err_type or "interrupt" in err_str.lower():
             raise
-        trace.append(TraceEntry(agent="optimizer", status="error", message=str(e)).model_dump())
+        append_trace(
+            trace,
+            TraceEntry(agent="optimizer", status="error", message=str(e)).model_dump(),
+        )
         return {"trace": trace}

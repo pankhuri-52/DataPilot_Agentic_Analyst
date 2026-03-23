@@ -8,6 +8,7 @@ import re
 from llm import get_gemini, invoke_with_retry
 from agents.state import TraceEntry
 from agents.schema_utils import load_schema
+from agents.trace_stream import append_trace
 
 
 # Block DDL, DML, and dangerous operations
@@ -63,21 +64,29 @@ def run_executor(state: dict) -> dict:
     data_feasibility = state.get("data_feasibility", "none")
     trace = state.get("trace", [])
 
-    trace.append(
+    append_trace(
+        trace,
         TraceEntry(agent="executor", status="info", message="Preparing to generate and execute SQL...").model_dump()
     )
 
     if data_feasibility == "none":
-        trace.append(TraceEntry(agent="executor", status="info", message="Skipped – no feasible data").model_dump())
+        append_trace(
+            trace,
+            TraceEntry(agent="executor", status="info", message="Skipped – no feasible data").model_dump(),
+        )
         return {"trace": trace}
 
     # Use nearest_plan if partial, else plan
     effective_plan = nearest_plan if data_feasibility == "partial" and nearest_plan else plan
     if not effective_plan:
-        trace.append(TraceEntry(agent="executor", status="error", message="No plan available").model_dump())
+        append_trace(
+            trace,
+            TraceEntry(agent="executor", status="error", message="No plan available").model_dump(),
+        )
         return {"trace": trace}
 
-    trace.append(
+    append_trace(
+        trace,
         TraceEntry(agent="executor", status="info", message="Connecting to database...").model_dump()
     )
 
@@ -88,13 +97,21 @@ def run_executor(state: dict) -> dict:
         connector = None
 
     if not connector:
-        trace.append(TraceEntry(agent="executor", status="error", message="No database configured. Set BIGQUERY_PROJECT_ID or DATABASE_TYPE=postgres with POSTGRES_URL.").model_dump())
+        append_trace(
+            trace,
+            TraceEntry(
+                agent="executor",
+                status="error",
+                message="No database configured. Set BIGQUERY_PROJECT_ID or DATABASE_TYPE=postgres with POSTGRES_URL.",
+            ).model_dump(),
+        )
         return {"trace": trace}
 
     sql = state.get("sql")
     if not sql:
-        trace.append(
-            TraceEntry(agent="executor", status="info", message="Generating SQL from analysis plan...").model_dump()
+        append_trace(
+            trace,
+            TraceEntry(agent="executor", status="info", message="Generating SQL from analysis plan...").model_dump(),
         )
         project_id = os.getenv("BIGQUERY_PROJECT_ID")
         dataset_id = os.getenv("BIGQUERY_DATASET", "retail_data")
@@ -131,29 +148,35 @@ def run_executor(state: dict) -> dict:
             sql = re.sub(r"\n?```$", "", sql)
         sql = sql.strip()
     else:
-        trace.append(
-            TraceEntry(agent="executor", status="info", message="Using SQL from Optimizer...").model_dump()
+        append_trace(
+            trace,
+            TraceEntry(agent="executor", status="info", message="Using SQL from Optimizer...").model_dump(),
         )
         schema = load_schema()
 
     try:
         if FORBIDDEN_SQL_PATTERNS.search(sql):
-            trace.append(TraceEntry(agent="executor", status="error", message="SQL contains forbidden operations").model_dump())
+            append_trace(
+                trace,
+                TraceEntry(agent="executor", status="error", message="SQL contains forbidden operations").model_dump(),
+            )
             return {"trace": trace}
 
-        trace.append(
-            TraceEntry(agent="executor", status="info", message="Executing query on database...").model_dump()
+        append_trace(
+            trace,
+            TraceEntry(agent="executor", status="info", message="Executing query on database...").model_dump(),
         )
 
         raw_results = connector.execute(sql)
 
-        trace.append(
+        append_trace(
+            trace,
             TraceEntry(
                 agent="executor",
                 status="success",
                 message=f"Executed query, {len(raw_results)} rows",
                 output={"sql": sql, "row_count": len(raw_results)},
-            ).model_dump()
+            ).model_dump(),
         )
 
         update = {"sql": sql, "raw_results": raw_results, "trace": trace}
@@ -173,5 +196,8 @@ def run_executor(state: dict) -> dict:
 
         return update
     except Exception as e:
-        trace.append(TraceEntry(agent="executor", status="error", message=str(e)).model_dump())
+        append_trace(
+            trace,
+            TraceEntry(agent="executor", status="error", message=str(e)).model_dump(),
+        )
         return {"trace": trace}

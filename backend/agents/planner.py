@@ -6,6 +6,7 @@ stops and asks if they want to proceed with the available range instead.
 import json
 from llm import get_gemini, invoke_with_retry
 from agents.state import AnalysisPlan, TraceEntry
+from agents.trace_stream import append_trace
 from agents.schema_utils import load_schema, extract_data_ranges
 
 EXECUTION_PHASE_ORDER = (
@@ -189,12 +190,16 @@ def run_planner(state: dict) -> dict:
     trace = state.get("trace", [])
     history = state.get("conversation_history") or []
 
-    trace.append(
+    append_trace(
+        trace,
         TraceEntry(agent="planner", status="info", message="Analyzing your query...").model_dump()
     )
 
     if not query or not query.strip():
-        trace.append(TraceEntry(agent="planner", status="error", message="Empty query").model_dump())
+        append_trace(
+            trace,
+            TraceEntry(agent="planner", status="error", message="Empty query").model_dump(),
+        )
         return {
             "plan": AnalysisPlan(
                 metrics=[],
@@ -207,7 +212,8 @@ def run_planner(state: dict) -> dict:
             "trace": trace,
         }
 
-    trace.append(
+    append_trace(
+        trace,
         TraceEntry(agent="planner", status="info", message="Checking if question is valid and answerable...").model_dump()
     )
 
@@ -219,13 +225,14 @@ def run_planner(state: dict) -> dict:
             if "available from" in data_ranges_str
             else ""
         )
-        trace.append(
+        append_trace(
+            trace,
             TraceEntry(
                 agent="planner",
                 status="info",
                 message="Validating time range against available data...",
                 output={"data_availability": data_ranges_str[:200] + "..." if len(data_ranges_str) > 200 else data_ranges_str},
-            ).model_dump()
+            ).model_dump(),
         )
 
         history_section = _build_conversation_history_section(history)
@@ -236,12 +243,13 @@ def run_planner(state: dict) -> dict:
             CONVERSATION_HISTORY_SECTION=history_section or "",
             DATA_AVAILABILITY_SECTION=data_section or "No date-range metadata available; skip time-range validation.",
         )
-        trace.append(
+        append_trace(
+            trace,
             TraceEntry(
                 agent="planner",
                 status="info",
                 message="Drafting analysis plan with the model…",
-            ).model_dump()
+            ).model_dump(),
         )
         plan = invoke_with_retry(structured_llm, prompt)
 
@@ -255,7 +263,8 @@ def run_planner(state: dict) -> dict:
         _normalize_execution_steps(plan_dict)
 
         if plan_dict.get("is_valid"):
-            trace.append(
+            append_trace(
+                trace,
                 TraceEntry(
                     agent="planner",
                     status="success",
@@ -267,21 +276,25 @@ def run_planner(state: dict) -> dict:
                         "filters": plan_dict.get("filters", {}),
                         "execution_steps": plan_dict.get("execution_steps", []),
                     },
-                ).model_dump()
+                ).model_dump(),
             )
         else:
-            trace.append(
+            append_trace(
+                trace,
                 TraceEntry(
                     agent="planner",
                     status="success",
                     message="Clarifying questions generated – data not available for requested period or query needs refinement",
                     output={"is_valid": False, "clarifying_questions": plan_dict.get("clarifying_questions", [])},
-                ).model_dump()
+                ).model_dump(),
             )
 
         return {"plan": plan_dict, "trace": trace}
     except Exception as e:
-        trace.append(TraceEntry(agent="planner", status="error", message=str(e)).model_dump())
+        append_trace(
+            trace,
+            TraceEntry(agent="planner", status="error", message=str(e)).model_dump(),
+        )
         return {
             "plan": AnalysisPlan(
                 metrics=[],
