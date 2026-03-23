@@ -23,7 +23,7 @@ Database schema (tables and columns):
 
 Your job:
 1. Check if the requested metrics and dimensions can be satisfied with the available tables and columns.
-2. If the plan has date filters (e.g. start_date, end_date, period like "last_month", "last_quarter"), check whether the requested time range falls within the available data_range above. If the requested period is outside the known range, set feasibility to "partial" or "none" and explain in missing_explanation. Use the actual min and max dates from the data availability section above (e.g. "The requested period (e.g. last month) has no data. Available data spans from 2024-01-01 to 2024-02-15. Try asking for a time range within this period.").
+2. If the plan has date filters (e.g. start_date, end_date, period like "last_month", "last_quarter"), check whether the requested time range falls within the available data_range above. If the requested period is outside the known range, set feasibility to "partial" or "none" and explain in missing_explanation. Quote the actual min and max dates from the data availability section above (illustrative wording only: e.g. orders/sales_daily often align with roughly 2024-03-01 to 2025-03-01 in the enriched dataset — use the real values from the schema text above; return_dates may extend slightly later).
 3. Return feasibility:
    - "full": All requested metrics and dimensions exist, and date filters (if any) fall within available data. We can answer the question exactly.
    - "partial": Some metrics/dimensions exist, or date range may be outside available data. We can answer a nearest possible version. Explain what's missing.
@@ -33,17 +33,17 @@ Your job:
 5. If "partial" or "none", provide missing_explanation: what columns or tables are missing, or if the date range is outside available data.
 6. List tables_used: which tables will be used for the (possibly adjusted) plan.
 
-Column mapping hints:
+Column mapping hints (align with schema tables: brands, sales_reps, warehouses, campaigns, products, customers, orders, order_items, shipments, return_items, order_campaigns, sales_daily):
 - revenue, total_amount, line_total -> orders.total_amount, order_items.line_total, sales_daily.revenue
 - units_sold, quantity -> order_items.quantity, sales_daily.units_sold
 - region, segment -> customers.region, customers.segment; sales_reps.region; warehouses.region
 - category -> products.category
-- brand -> brands.name, products.brand_id
-- date, order_date -> orders.order_date, sales_daily.date, shipments.ship_date, return_items.return_date
+- brand -> brands.name JOIN products ON products.brand_id = brands.brand_id
+- date, order_date -> orders.order_date, sales_daily.date, shipments.ship_date, return_items.return_date (each may have a different data_range)
 - product, product_id -> products, order_items.product_id
 - rep, sales rep -> sales_reps.full_name, customers.sales_rep_id
 - refund, returns -> return_items.refund_amount, return_items.reason_code
-- campaign, marketing channel -> campaigns.name, campaigns.channel, order_campaigns
+- campaign, marketing channel, attribution -> campaigns, order_campaigns (bridge to orders.order_id)
 - warehouse, carrier, fulfillment -> shipments, warehouses, shipments.carrier
 """
 

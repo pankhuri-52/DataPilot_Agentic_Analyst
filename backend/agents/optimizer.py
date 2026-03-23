@@ -31,8 +31,8 @@ Schema (dataset: {dataset}):
 Rules:
 1. Use standard BigQuery SQL. Table names: `{project}.{dataset}.table_name`
 2. Only SELECT statements. No CREATE, INSERT, UPDATE, DELETE.
-3. Use proper JOINs based on schema relationships.
-4. For date filters, use EXTRACT or DATE functions. If period is "last_quarter", use DATE_SUB and DATE_TRUNC.
+3. Use proper JOINs. The schema JSON includes a top-level `relationships` array (foreign keys such as products.brand_id -> brands.brand_id) — follow it for join paths.
+4. For date filters, use EXTRACT or DATE functions. If period is "last_quarter", use DATE_SUB and DATE_TRUNC. Respect `data_range` on date columns in the schema when filtering.
 5. Limit results to 1000 rows (add LIMIT 1000).
 6. Return ONLY the SQL query, no explanation. No markdown code blocks.
 """
@@ -51,8 +51,8 @@ Schema (schema: {schema}):
 Rules:
 1. Use standard PostgreSQL SQL. Table names: "{schema}".table_name or schema.table_name
 2. Only SELECT statements. No CREATE, INSERT, UPDATE, DELETE.
-3. Use proper JOINs based on schema relationships.
-4. For date filters, use DATE_TRUNC, INTERVAL, or CURRENT_DATE. If period is "last_quarter", use DATE_TRUNC('quarter', CURRENT_DATE) - INTERVAL '1 quarter'.
+3. Use proper JOINs. The schema JSON includes a top-level `relationships` array — follow it for join paths.
+4. For date filters, use DATE_TRUNC, INTERVAL, or CURRENT_DATE. If period is "last_quarter", use DATE_TRUNC('quarter', CURRENT_DATE) - INTERVAL '1 quarter'. Respect `data_range` on date columns in the schema when filtering.
 5. Limit results to 1000 rows (add LIMIT 1000).
 6. Return ONLY the SQL query, no explanation. No markdown code blocks.
 """

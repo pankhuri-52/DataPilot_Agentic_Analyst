@@ -24,6 +24,8 @@ class VisualizationOutput(BaseModel):
 
 VIZ_PROMPT = """You are a data visualization agent. Given query results and the analysis plan, produce a chart specification and explanation.
 
+Context: rows are from a retail/B2B warehouse query (e.g. sales, products, customers, regions). Use only column names that appear in the results below.
+
 User question: {query}
 
 Analysis plan:

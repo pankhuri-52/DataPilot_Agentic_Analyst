@@ -1,7 +1,15 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { Check, ChevronDown, ChevronRight, Circle, Loader2, PauseCircle } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  AlertCircle,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  Circle,
+  Loader2,
+  PauseCircle,
+} from "lucide-react";
 import {
   Accordion,
   AccordionContent,
@@ -100,7 +108,6 @@ const FEASIBILITY_LABELS: Record<string, string> = {
   none: "Your connected data does not support this analysis as requested.",
 };
 
-/** Human-friendly line for discovery; supports legacy traces like "Feasibility: full". */
 function formatDiscoveryStatus(
   rawMessage: string | undefined,
   output?: Record<string, unknown>
@@ -130,6 +137,299 @@ function traceDisplayForPhase(trace: TraceEntry[], phase: string): string | unde
   return last.message;
 }
 
+function traceEntriesForPhase(trace: TraceEntry[], phase: string): TraceEntry[] {
+  return trace.filter((e) => e.agent === phase);
+}
+
+function formatTraceEntryMessage(phase: string, entry: TraceEntry): string {
+  const raw = (entry.message ?? "").trim();
+  if (!raw) return "…";
+  if (phase === "discovery") {
+    return formatDiscoveryStatus(entry.message, entry.output) ?? raw;
+  }
+  return raw;
+}
+
+type PhaseStepStatus = "pending" | "active" | "awaiting" | "done";
+
+function isSubstepFailureLike(entry: TraceEntry): boolean {
+  if (entry.status === "error") return true;
+  const m = (entry.message ?? "").trim().toLowerCase();
+  if (entry.status === "info" && m.startsWith("dry run skipped:")) return true;
+  return false;
+}
+
+function rowStateForTimeline(
+  entry: TraceEntry,
+  index: number,
+  total: number,
+  phaseStatus: PhaseStepStatus,
+  phase: ExecutionPhase
+): "done" | "active" | "error" {
+  if (isSubstepFailureLike(entry)) return "error";
+  if (phaseStatus === "done") return "done";
+  if (phaseStatus === "awaiting" && phase === "optimizer") return "done";
+  if (phaseStatus === "active") {
+    if (total === 0) return "active";
+    if (index < total - 1) return "done";
+    if (entry.status === "success") return "done";
+    return "active";
+  }
+  return "done";
+}
+
+function useStaggeredSubstepReveal(
+  entriesLength: number,
+  phaseStatus: PhaseStepStatus
+): number {
+  const prevLenRef = useRef(0);
+  const [visibleCount, setVisibleCount] = useState(0);
+
+  useEffect(() => {
+    const len = entriesLength;
+    if (len === 0) {
+      prevLenRef.current = 0;
+      setVisibleCount(0);
+      return;
+    }
+
+    const reduceMotion =
+      typeof window !== "undefined" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+    if (
+      phaseStatus === "done" ||
+      phaseStatus === "awaiting" ||
+      phaseStatus === "pending"
+    ) {
+      prevLenRef.current = len;
+      setVisibleCount(len);
+      return;
+    }
+    if (phaseStatus !== "active") {
+      prevLenRef.current = len;
+      setVisibleCount(len);
+      return;
+    }
+
+    const prev = prevLenRef.current;
+    if (len === prev) return;
+
+    if (len < prev) {
+      prevLenRef.current = len;
+      setVisibleCount(len);
+      return;
+    }
+
+    const delta = len - prev;
+    prevLenRef.current = len;
+
+    if (reduceMotion || delta === 1) {
+      setVisibleCount(len);
+      return;
+    }
+
+    let step = prev;
+    setVisibleCount(step);
+    const staggerMs = 300;
+    const id = window.setInterval(() => {
+      step += 1;
+      setVisibleCount(step);
+      if (step >= len) window.clearInterval(id);
+    }, staggerMs);
+    return () => window.clearInterval(id);
+  }, [entriesLength, phaseStatus]);
+
+  return visibleCount;
+}
+
+function rowStateWithStagger(
+  entry: TraceEntry,
+  index: number,
+  visibleCount: number,
+  totalEntries: number,
+  phaseStatus: PhaseStepStatus,
+  phase: ExecutionPhase
+): "done" | "active" | "error" {
+  if (isSubstepFailureLike(entry)) return "error";
+  if (index < visibleCount - 1) return "done";
+  if (index === visibleCount - 1) {
+    if (visibleCount < totalEntries) return "active";
+    return rowStateForTimeline(entry, index, totalEntries, phaseStatus, phase);
+  }
+  return "done";
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SubstepDot — status circle for each substep row
+// ─────────────────────────────────────────────────────────────────────────────
+function SubstepDot({ state }: { state: "done" | "active" | "error" }) {
+  return (
+    <div
+      className={cn(
+        "flex size-5 shrink-0 items-center justify-center rounded-full border-2 bg-card",
+        // Active: primary border + soft glow ring
+        state === "active" &&
+          "border-primary/60 shadow-[0_0_0_3px_hsl(var(--primary)/0.12)]",
+        // Done: emerald border
+        state === "done" && "border-emerald-500/40 dark:border-emerald-400/35",
+        // Error: destructive border
+        state === "error" && "border-destructive/50"
+      )}
+    >
+      {state === "error" && (
+        <AlertCircle className="size-3 text-destructive" aria-hidden />
+      )}
+      {state === "done" && (
+        <Check className="size-3 text-emerald-600 dark:text-emerald-400" aria-hidden />
+      )}
+      {state === "active" && (
+        <Loader2
+          className="size-3 animate-spin text-primary motion-reduce:animate-none"
+          aria-hidden
+        />
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PhaseSubstepsTimeline — substep rows (status circles + labels)
+// ─────────────────────────────────────────────────────────────────────────────
+function PhaseSubstepsTimeline({
+  phase,
+  phaseStatus,
+  entries,
+  awaitingExecute,
+  isLoading,
+}: {
+  phase: ExecutionPhase;
+  phaseStatus: PhaseStepStatus;
+  entries: TraceEntry[];
+  awaitingExecute: boolean;
+  isLoading: boolean;
+}) {
+  const showAwaitingRow =
+    phaseStatus === "awaiting" && phase === "optimizer" && awaitingExecute;
+  const showStartPlaceholder =
+    phaseStatus === "active" && isLoading && entries.length === 0;
+
+  const visibleCount = useStaggeredSubstepReveal(entries.length, phaseStatus);
+  const visibleEntries = entries.length === 0 ? [] : entries.slice(0, visibleCount);
+
+  if (entries.length === 0 && !showStartPlaceholder && !showAwaitingRow) {
+    return null;
+  }
+
+  return (
+    <div
+      className="mt-2 pl-1"
+      role="list"
+      aria-label={`Steps for ${phase}`}
+    >
+      {/* Loading placeholder shown before first trace entry arrives */}
+      {showStartPlaceholder && (
+        <div className="flex items-start gap-2.5 pb-3" role="listitem">
+          <div className="flex size-5 shrink-0 items-center justify-center rounded-full border-2 border-primary/40 bg-card shadow-[0_0_0_3px_hsl(var(--primary)/0.10)]">
+            <Loader2
+              className="size-3 animate-spin text-primary motion-reduce:animate-none"
+              aria-hidden
+            />
+          </div>
+          <p className="pt-0.5 text-[11px] leading-snug text-muted-foreground">
+            Starting…
+          </p>
+        </div>
+      )}
+
+      {visibleEntries.map((entry, index) => {
+        const msg = formatTraceEntryMessage(phase, entry);
+        const rs = rowStateWithStagger(
+          entry,
+          index,
+          visibleCount,
+          entries.length,
+          phaseStatus,
+          phase
+        );
+
+        return (
+          <div
+            key={`${phase}-sub-${index}`}
+            className="flex items-start gap-2.5 pb-3 last:pb-0"
+            role="listitem"
+          >
+            <SubstepDot state={rs} />
+            <p
+              className={cn(
+                "min-w-0 flex-1 break-words pt-0.5 text-[11px] leading-snug",
+                rs === "active"  && "font-medium text-foreground/90",
+                rs === "done"    && "text-muted-foreground",
+                rs === "error"   && "text-destructive"
+              )}
+            >
+              {msg}
+            </p>
+          </div>
+        );
+      })}
+
+      {/* Pause row shown when optimizer is waiting for user confirmation */}
+      {showAwaitingRow && (
+        <div className="flex items-start gap-2.5" role="listitem">
+          <div className="flex size-5 shrink-0 items-center justify-center rounded-full border-2 border-primary bg-card shadow-[0_0_0_3px_hsl(var(--primary)/0.12)]">
+            <PauseCircle className="size-3 text-primary" aria-hidden />
+          </div>
+          <p className="pt-0.5 text-[11px] font-medium leading-snug text-primary">
+            Awaiting your confirmation to run the query
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PhaseStatusIcon — the larger icon shown next to each top-level phase row
+// ─────────────────────────────────────────────────────────────────────────────
+function PhaseStatusIcon({ status }: { status: PhaseStepStatus }) {
+  if (status === "active") {
+    return (
+      <Loader2
+        className="size-5 shrink-0 animate-spin text-primary motion-reduce:animate-none"
+        aria-hidden
+      />
+    );
+  }
+  if (status === "awaiting") {
+    return (
+      <PauseCircle
+        className="size-5 shrink-0 text-primary"
+        aria-label="Awaiting your confirmation"
+      />
+    );
+  }
+  if (status === "done") {
+    return (
+      <Check
+        className="size-5 shrink-0 text-emerald-600 dark:text-emerald-400"
+        aria-hidden
+      />
+    );
+  }
+  // pending
+  return (
+    <Circle
+      className="size-5 shrink-0 text-muted-foreground/35"
+      strokeWidth={1.75}
+      aria-hidden
+    />
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ExecutionPlanPanel — main export
+// ─────────────────────────────────────────────────────────────────────────────
 export interface ExecutionPlanPanelProps {
   plan?: Record<string, unknown>;
   liveTrace: TraceEntry[];
@@ -181,7 +481,7 @@ export function ExecutionPlanPanel({
     setAccordionValue([activePhase]);
   }, [activePhase, isLoading, isTurnComplete]);
 
-  function stepStatus(phase: ExecutionPhase): "pending" | "active" | "awaiting" | "done" {
+  function stepStatus(phase: ExecutionPhase): PhaseStepStatus {
     const pi = phaseIdx(phase);
     if (awaitingExecute) {
       if (phase === "optimizer") return "awaiting";
@@ -196,8 +496,16 @@ export function ExecutionPlanPanel({
     }
     if (isLoading) {
       const ai = phaseIdx(activePhase);
+      const entriesForPhase = traceEntriesForPhase(liveTrace, phase);
+      const lastEntry = entriesForPhase[entriesForPhase.length - 1];
+      const phaseFinishedByTrace =
+        lastEntry &&
+        (lastEntry.status === "success" || lastEntry.status === "error");
       if (pi < ai) return "done";
-      if (pi === ai) return "active";
+      if (pi === ai) {
+        if (phaseFinishedByTrace) return "done";
+        return "active";
+      }
       return "pending";
     }
     if (lastTraceAgent) {
@@ -213,6 +521,7 @@ export function ExecutionPlanPanel({
 
   return (
     <div className="rounded-xl border border-border bg-card/50">
+      {/* ── Collapsed "all done" pill ── */}
       {panelCollapsed && fullPipelineComplete ? (
         <button
           type="button"
@@ -232,6 +541,7 @@ export function ExecutionPlanPanel({
         </button>
       ) : (
         <>
+          {/* ── Collapse button (shown after full pipeline completes) ── */}
           {fullPipelineComplete && !panelCollapsed && (
             <button
               type="button"
@@ -242,10 +552,12 @@ export function ExecutionPlanPanel({
               Collapse summary
             </button>
           )}
+
           <div className="px-4 pb-4 pt-2">
             <p className="mb-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">
               Execution plan
             </p>
+
             <Accordion
               multiple
               value={accordionValue}
@@ -257,79 +569,117 @@ export function ExecutionPlanPanel({
               {steps.map((step) => {
                 const ph = step.phase;
                 if (!isPhase(ph)) return null;
+
                 const status = stepStatus(ph);
+                const phaseEntries = traceEntriesForPhase(liveTrace, ph);
                 const statusLine = traceDisplayForPhase(liveTrace, ph);
+
+                const hasTimeline =
+                  phaseEntries.length > 0 ||
+                  (status === "active" && isLoading && ph === activePhase) ||
+                  (status === "awaiting" && ph === "optimizer" && awaitingExecute);
+
                 const detailRaw = step.detail?.trim();
+                const compareLine = hasTimeline
+                  ? phaseEntries.length > 0
+                    ? formatTraceEntryMessage(ph, phaseEntries[phaseEntries.length - 1])
+                    : undefined
+                  : statusLine;
                 const detail =
-                  detailRaw && statusLine && textsRedundant(detailRaw, statusLine)
+                  detailRaw && compareLine && textsRedundant(detailRaw, compareLine)
                     ? undefined
                     : detailRaw;
-                const showBody = Boolean(detail || statusLine);
+
+                const showBody = Boolean(
+                  detail || hasTimeline || (statusLine && !hasTimeline)
+                );
 
                 return (
-                  <AccordionItem key={ph} value={ph} className="border-border/80">
+                  <AccordionItem
+                    key={ph}
+                    value={ph}
+                    className={cn(
+                      "border-border/80",
+                      // Highlight the active phase row with a very subtle left accent bar
+                      status === "active" &&
+                        "relative before:absolute before:left-[-16px] before:top-1 before:bottom-1 before:w-[2px] before:rounded-full before:bg-primary/40"
+                    )}
+                  >
                     <div className="flex gap-3 py-2">
+                      {/* Phase-level status icon */}
                       <div className="flex shrink-0 flex-col items-center pt-0.5">
-                        {status === "active" && (
-                          <Loader2
-                            className="size-5 shrink-0 animate-spin text-primary motion-reduce:animate-none"
-                            aria-hidden
-                          />
-                        )}
-                        {status === "awaiting" && (
-                          <PauseCircle
-                            className="size-5 shrink-0 text-primary"
-                            aria-label="Awaiting your confirmation"
-                          />
-                        )}
-                        {status === "done" && (
-                          <Check
-                            className="size-5 shrink-0 text-emerald-600 dark:text-emerald-400"
-                            aria-hidden
-                          />
-                        )}
-                        {status === "pending" && (
-                          <Circle
-                            className="size-5 shrink-0 text-muted-foreground/35"
-                            strokeWidth={1.75}
-                            aria-hidden
-                          />
-                        )}
+                        <PhaseStatusIcon status={status} />
                       </div>
+
                       <div className="min-w-0 flex-1">
                         {showBody ? (
                           <>
                             <AccordionTrigger className="py-0 pr-1 hover:no-underline">
                               <div className="flex flex-col items-start gap-0.5 text-left">
-                                <span className="text-sm font-medium line-clamp-2">{step.title}</span>
-                                {status === "awaiting" && ph === "optimizer" && (
-                                  <span className="text-[11px] font-normal text-primary">
-                                    Awaiting your confirmation to run the query
-                                  </span>
-                                )}
-                                {statusLine && status !== "pending" && (
-                                  <span className="text-[11px] font-normal text-muted-foreground line-clamp-3">
-                                    {statusLine}
-                                  </span>
-                                )}
+                                <span
+                                  className={cn(
+                                    "text-sm font-medium line-clamp-2",
+                                    status === "pending" && "text-muted-foreground/60"
+                                  )}
+                                >
+                                  {step.title}
+                                </span>
+
+                                {/* Awaiting confirmation sub-label */}
+                                {status === "awaiting" &&
+                                  ph === "optimizer" &&
+                                  !hasTimeline && (
+                                    <span className="text-[11px] font-normal text-primary">
+                                      Awaiting your confirmation to run the query
+                                    </span>
+                                  )}
+
+                                {/* Status line shown only when there's no full timeline */}
+                                {statusLine &&
+                                  status !== "pending" &&
+                                  !hasTimeline && (
+                                    <span className="text-[11px] font-normal text-muted-foreground line-clamp-3">
+                                      {statusLine}
+                                    </span>
+                                  )}
                               </div>
                             </AccordionTrigger>
+
                             <AccordionContent className="pb-1 pl-0">
+                              <PhaseSubstepsTimeline
+                                phase={ph}
+                                phaseStatus={status}
+                                entries={phaseEntries}
+                                awaitingExecute={awaitingExecute}
+                                isLoading={isLoading}
+                              />
+
+                              {/* Optional plan detail text below substeps */}
                               {detail && (
-                                <p className="mt-1 whitespace-pre-wrap text-xs text-muted-foreground">
+                                <p className="mt-2 whitespace-pre-wrap text-xs text-muted-foreground">
                                   {detail}
                                 </p>
                               )}
                             </AccordionContent>
                           </>
                         ) : (
+                          /* Non-expandable phase (no body content yet) */
                           <div className="py-1">
-                            <span className="text-sm font-medium line-clamp-2">{step.title}</span>
-                            {status === "awaiting" && ph === "optimizer" && (
-                              <p className="mt-0.5 text-[11px] text-primary">
-                                Awaiting your confirmation to run the query
-                              </p>
-                            )}
+                            <span
+                              className={cn(
+                                "text-sm font-medium line-clamp-2",
+                                status === "pending" && "text-muted-foreground/60"
+                              )}
+                            >
+                              {step.title}
+                            </span>
+                            {status === "awaiting" &&
+                              ph === "optimizer" &&
+                              !hasTimeline && (
+                                <p className="mt-0.5 text-[11px] text-primary">
+                                  Awaiting your confirmation to run the query
+                                </p>
+                              )}
                           </div>
                         )}
                       </div>
@@ -338,6 +688,8 @@ export function ExecutionPlanPanel({
                 );
               })}
             </Accordion>
+
+            {/* Progress label shown during active loading */}
             {progressLabel && (
               <p className="mt-2 text-[11px] text-muted-foreground motion-reduce:opacity-100">
                 {progressLabel} in progress…

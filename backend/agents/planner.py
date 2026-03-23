@@ -41,10 +41,10 @@ User question: {query}
 {DATA_AVAILABILITY_SECTION}
 
 Your job:
-1. Determine if the question is valid and analyzable (e.g. about sales, revenue, orders, products, customers, regions, segments).
-2. If the question asks for a time period (e.g. "last month", "last quarter", "last year", specific dates): check whether that period falls within the DATA AVAILABILITY above. If the requested period is OUTSIDE the available range (e.g. user asks for "last month" but data only spans 2024-01-01 to 2024-02-15), set is_valid=false and add a clarifying_question that:
+1. Determine if the question is valid and analyzable (e.g. about sales, revenue, orders, products, customers, brands, campaigns, shipments, returns, regions, segments, sales reps).
+2. If the question asks for a time period (e.g. "last month", "last quarter", "last year", specific dates): check whether that period falls within the DATA AVAILABILITY above. If the requested period is OUTSIDE the available range (e.g. the user asks for dates before the earliest or after the latest order/sales window in DATA AVAILABILITY), set is_valid=false and add a clarifying_question that:
    (a) States that the data for the requested period is not available in the database.
-   (b) States the available range (e.g. "We have data from 2024-01-01 to 2024-02-15").
+   (b) States the available range using the exact min and max dates from DATA AVAILABILITY for the relevant column (illustrative shape only: "We have orders from 2024-03-01 to 2025-03-01" — always copy real values from DATA AVAILABILITY above, not this example if they differ).
    (c) Offers to answer the same question for the available range (e.g. "Would you like to get total sales by region for this available period instead?").
 3. If VALID and time range is within availability: produce a structured analysis plan with:
    - metrics: what to measure (e.g. revenue, total_amount, units_sold, count of orders)
@@ -58,11 +58,11 @@ Your job:
    - "needs_clarification": the user might mean a data question but it is too vague to plan (set is_valid=false and add clarifying_questions).
 
 Rules:
-- Only analytics questions about business data (sales, orders, products, customers) are valid.
+- Only analytics questions about business data (sales, orders, products, customers, brands, campaigns, fulfillment, returns, reps) are valid when they map to the connected warehouse.
 - Use lowercase for metric/dimension names that could map to database columns.
 - For date filters, use keys like "start_date", "end_date" or "period" (e.g. "last_quarter").
 - Keep clarifying questions concise and actionable.
-- When data is outside range, ALWAYS include the exact min and max dates from DATA AVAILABILITY in your clarifying_question.
+- When data is outside range, ALWAYS include the exact min and max dates from DATA AVAILABILITY in your clarifying_question (never invent dates; different date columns can have different ranges).
 
 CONVERSATIONAL CONTEXT (when conversation history is provided):
 - If the user's current message is a brief affirmation (e.g. "Sure", "Yes", "Okay", "Yes please", "Go ahead", "That works") AND the previous assistant message contained a clarifying question offering to answer for the available data range, treat the user as agreeing.
@@ -235,6 +235,13 @@ def run_planner(state: dict) -> dict:
             query=query,
             CONVERSATION_HISTORY_SECTION=history_section or "",
             DATA_AVAILABILITY_SECTION=data_section or "No date-range metadata available; skip time-range validation.",
+        )
+        trace.append(
+            TraceEntry(
+                agent="planner",
+                status="info",
+                message="Drafting analysis plan with the model…",
+            ).model_dump()
         )
         plan = invoke_with_retry(structured_llm, prompt)
 
