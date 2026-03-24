@@ -29,9 +29,10 @@ def _min_similarity() -> float:
 def _relaxed_min_similarity() -> float | None:
     """
     Second pass when primary threshold returns no rows.
-    Default 0.68; set QUERY_KB_RELAXED_MIN_SIMILARITY=none (or off) to disable.
+    Default off — relaxed matches were often irrelevant (e.g. ~0.69 on unrelated questions).
+    Set QUERY_KB_RELAXED_MIN_SIMILARITY=0.72 (or similar) to re-enable a looser second pass.
     """
-    raw = (os.getenv("QUERY_KB_RELAXED_MIN_SIMILARITY") or "0.68").strip()
+    raw = (os.getenv("QUERY_KB_RELAXED_MIN_SIMILARITY") or "none").strip()
     if raw.lower() in ("none", "off", "disable", "0"):
         return None
     try:

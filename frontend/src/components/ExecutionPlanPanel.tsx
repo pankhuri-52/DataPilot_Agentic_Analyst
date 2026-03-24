@@ -83,7 +83,10 @@ function normalizeExecutionSteps(plan?: Record<string, unknown>): ExecutionStepR
     if (phase !== exp) {
       return defaultExecutionSteps();
     }
-    const title = String(item.title ?? "").trim() || DEFAULT_LABELS[exp];
+    const title =
+      exp === "planner"
+        ? String(item.title ?? "").trim() || DEFAULT_LABELS[exp]
+        : DEFAULT_LABELS[exp];
     const d = item.detail;
     const detail =
       typeof d === "string" && d.trim() ? d.trim() : d != null ? String(d) : null;
@@ -483,7 +486,10 @@ export function ExecutionPlanPanel({
 
   useEffect(() => {
     if (isTurnComplete || !isLoading) return;
-    setAccordionValue([activePhase]);
+    setAccordionValue((prev) => {
+      const prior = Array.isArray(prev) ? prev : [];
+      return Array.from(new Set([...prior, activePhase]));
+    });
   }, [activePhase, isLoading, isTurnComplete]);
 
   function stepStatus(phase: ExecutionPhase): PhaseStepStatus {

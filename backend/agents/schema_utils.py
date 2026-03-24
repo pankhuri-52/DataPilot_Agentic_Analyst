@@ -13,6 +13,30 @@ def load_schema() -> dict:
         return json.load(f)
 
 
+def plan_result_limit_display(plan: dict | None) -> str:
+    """Human-readable result_limit line for SQL-generation prompts."""
+    if not plan:
+        return "not specified"
+    rl = plan.get("result_limit")
+    if isinstance(rl, int) and rl > 0:
+        return str(rl)
+    return "not specified (open-ended breakdown; cap at 1000 rows in SQL)"
+
+
+def sql_row_limit_rule_5(plan: dict | None) -> str:
+    """Optimizer/executor prompt rule: LIMIT 1..1000 from plan.result_limit, else 1000."""
+    if not plan:
+        return "Limit results to at most 1000 rows (add LIMIT 1000)."
+    rl = plan.get("result_limit")
+    if isinstance(rl, int) and rl > 0:
+        n = min(rl, 1000)
+        return (
+            f"The plan sets result_limit={rl}: after ORDER BY on the primary metric, use LIMIT {n} "
+            "(never more than 1000 rows on the final SELECT)."
+        )
+    return "Limit results to at most 1000 rows (add LIMIT 1000)."
+
+
 def extract_data_ranges(schema: dict) -> str:
     """Extract data_range metadata from schema for date columns. Returns formatted string for prompt."""
     ranges = []

@@ -7,7 +7,7 @@ import json
 import re
 from llm import get_gemini, invoke_with_retry
 from agents.state import TraceEntry
-from agents.schema_utils import load_schema
+from agents.schema_utils import load_schema, plan_result_limit_display, sql_row_limit_rule_5
 from agents.trace_stream import append_trace
 
 
@@ -33,6 +33,7 @@ Analysis plan:
 - Metrics: {metrics}
 - Dimensions: {dimensions}
 - Filters: {filters}
+- Result row limit: {result_limit_display}
 
 Schema (dataset: {dataset}):
 {schema_json}
@@ -42,7 +43,7 @@ Rules:
 2. Only SELECT statements. No CREATE, INSERT, UPDATE, DELETE.
 3. Use proper JOINs. The schema JSON includes a top-level `relationships` array — follow it for join paths.
 4. For date filters, use EXTRACT or DATE functions. If period is "last_quarter", use DATE_SUB and DATE_TRUNC. Respect `data_range` on date columns in the schema when filtering.
-5. Limit results to 1000 rows (add LIMIT 1000).
+5. {row_limit_rule_5}
 6. Return ONLY the SQL query, no explanation. No markdown code blocks.
 """
 
@@ -52,6 +53,7 @@ Analysis plan:
 - Metrics: {metrics}
 - Dimensions: {dimensions}
 - Filters: {filters}
+- Result row limit: {result_limit_display}
 
 Schema (schema: {schema}):
 {schema_json}
@@ -61,7 +63,7 @@ Rules:
 2. Only SELECT statements. No CREATE, INSERT, UPDATE, DELETE.
 3. Use proper JOINs. The schema JSON includes a top-level `relationships` array — follow it for join paths.
 4. For date filters, use DATE_TRUNC, INTERVAL, or CURRENT_DATE. If period is "last_quarter", use DATE_TRUNC('quarter', CURRENT_DATE) - INTERVAL '1 quarter'. Respect `data_range` on date columns in the schema when filtering.
-5. Limit results to 1000 rows (add LIMIT 1000).
+5. {row_limit_rule_5}
 6. Return ONLY the SQL query, no explanation. No markdown code blocks.
 """
 
@@ -75,7 +77,15 @@ def run_executor(state: dict) -> dict:
 
     append_trace(
         trace,
-        TraceEntry(agent="executor", status="info", message="Preparing to generate and execute SQL...").model_dump()
+        TraceEntry(
+            agent="executor",
+            status="info",
+            message=(
+                "Preparing to execute the approved query..."
+                if state.get("sql")
+                else "Preparing to generate and execute SQL..."
+            ),
+        ).model_dump(),
     )
 
     if data_feasibility == "none":
@@ -129,6 +139,8 @@ def run_executor(state: dict) -> dict:
         metrics = effective_plan.get("metrics", [])
         dimensions = effective_plan.get("dimensions", [])
         filters = effective_plan.get("filters", {})
+        rld = plan_result_limit_display(effective_plan)
+        rlr = sql_row_limit_rule_5(effective_plan)
 
         llm = get_gemini()
         dialect = connector.dialect
@@ -138,6 +150,8 @@ def run_executor(state: dict) -> dict:
                 metrics=metrics,
                 dimensions=dimensions,
                 filters=json.dumps(filters),
+                result_limit_display=rld,
+                row_limit_rule_5=rlr,
                 schema_json=schema_json,
                 schema=schema_name,
             )
@@ -146,6 +160,8 @@ def run_executor(state: dict) -> dict:
                 metrics=metrics,
                 dimensions=dimensions,
                 filters=json.dumps(filters),
+                result_limit_display=rld,
+                row_limit_rule_5=rlr,
                 schema_json=schema_json,
                 project=project_id,
                 dataset=dataset_id,

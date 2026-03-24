@@ -22,6 +22,13 @@ class AnalysisPlan(BaseModel):
     metrics: list[str] = Field(description="What to measure (e.g. revenue, total_amount, count)")
     dimensions: list[str] = Field(description="Group by (e.g. region, category, segment)")
     filters: dict[str, Any] = Field(default_factory=dict, description="Filters (e.g. date range, status)")
+    result_limit: Optional[int] = Field(
+        default=None,
+        description=(
+            "Max rows for the final ranked/breakdown result. Use 1 when the user asks for a single winner "
+            "(e.g. one brand with highest sales). Use N for explicit top-N. Omit/null for open-ended 'all' comparisons."
+        ),
+    )
     is_valid: bool = Field(description="Whether the query is valid and analyzable")
     clarifying_questions: list[str] = Field(default_factory=list, description="Questions to ask if invalid")
     query_scope: Optional[str] = Field(

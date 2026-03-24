@@ -573,14 +573,13 @@ def _maybe_index_query_kb(last_state: dict, user_query: str) -> None:
     plan = last_state.get("plan")
     if not isinstance(plan, dict):
         return
-    q = (user_query or "").strip()
-    if not q:
-        return
     try:
         from agents.query_kb_helpers import (
             build_index_text,
             guess_columns_from_sql,
+            is_trivial_kb_followup,
             kb_embedding_match_text,
+            resolve_kb_user_question_for_index,
             result_preview_payload,
             schema_fingerprint_from_schema,
         )
@@ -595,6 +594,12 @@ def _maybe_index_query_kb(last_state: dict, user_query: str) -> None:
         dialect = connector.dialect
         schema = load_schema()
         fingerprint = schema_fingerprint_from_schema(schema)
+        hist = last_state.get("conversation_history") or []
+        if not isinstance(hist, list):
+            hist = []
+        q = resolve_kb_user_question_for_index((user_query or "").strip(), hist)
+        if not q or is_trivial_kb_followup(q):
+            return
         tables_used = last_state.get("tables_used") or []
         if not isinstance(tables_used, list):
             tables_used = []
@@ -788,24 +793,15 @@ async def _ask_stream_generator(
         else:
             input_data = {"query": query, "trace": [], "conversation_history": history}
 
-        # "custom" streams each trace line as agents append (LangGraph get_stream_writer);
-        # "values" yields full state after each node (fallback + interrupt handling).
+        # stream_mode includes "custom" so append_trace() can use get_stream_writer (used by LangGraph).
+        # Do not yield SSE from custom "trace_progress" here: the next "values" chunk already contains
+        # the same trace rows, and catch-up below would re-emit them — duplicating every substep in the UI.
         async for raw in graph.astream(
             input_data, config=config, stream_mode=["values", "custom"]
         ):
             if isinstance(raw, tuple) and len(raw) == 2:
                 mode, data = raw
                 if mode == "custom":
-                    if isinstance(data, dict) and data.get("kind") == "trace_progress":
-                        entry = data.get("entry")
-                        if isinstance(entry, dict):
-                            event = {
-                                "type": "progress",
-                                "agent": entry.get("agent", ""),
-                                "trace_entry": entry,
-                            }
-                            yield f"data: {json.dumps(event)}\n\n"
-                            prev_trace_len += 1
                     continue
                 if mode == "values":
                     chunk = data

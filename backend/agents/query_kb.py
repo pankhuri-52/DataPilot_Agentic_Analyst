@@ -11,6 +11,7 @@ from langgraph.types import interrupt
 
 from agents.query_kb_helpers import (
     kb_embedding_match_text,
+    resolve_kb_user_question_for_index,
     schema_fingerprint_from_schema,
 )
 from agents.schema_utils import load_schema
@@ -43,11 +44,15 @@ def run_query_kb(state: dict) -> dict:
     """
     trace = state.get("trace", [])
     query = (state.get("query") or "").strip()
+    hist = state.get("conversation_history") or []
+    if not isinstance(hist, list):
+        hist = []
+    match_query = resolve_kb_user_question_for_index(query, hist)
 
     if not _enabled():
         return {}
 
-    if not query:
+    if not match_query.strip():
         return {}
 
     try:
@@ -80,7 +85,7 @@ def run_query_kb(state: dict) -> dict:
         )
         return {"trace": trace}
 
-    match_text = kb_embedding_match_text(query)
+    match_text = kb_embedding_match_text(match_query)
 
     append_trace(
         trace,

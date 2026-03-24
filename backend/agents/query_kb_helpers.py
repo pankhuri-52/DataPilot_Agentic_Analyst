@@ -8,6 +8,72 @@ import json
 import re
 from typing import Any
 
+# Phrases that are not useful as KB keys / retrieval text (retries, approvals, continuations).
+_TRIVIAL_KB_FOLLOWUP_NORMALIZED: frozenset[str] = frozenset(
+    {
+        "please continue",
+        "continue",
+        "continue please",
+        "please proceed",
+        "proceed",
+        "go ahead",
+        "go on",
+        "yes",
+        "yeah",
+        "yep",
+        "ok",
+        "okay",
+        "sure",
+        "try again",
+        "retry",
+        "thanks",
+        "thank you",
+    }
+)
+
+
+def _normalize_for_trivial_check(text: str) -> str:
+    t = (text or "").strip().lower()
+    t = re.sub(r"[!?.…]+$", "", t).strip()
+    t = re.sub(r"\s+", " ", t)
+    return t
+
+
+def is_trivial_kb_followup(text: str) -> bool:
+    """True if this user text should not be stored or embedded as the primary KB question."""
+    t = _normalize_for_trivial_check(text)
+    if not t:
+        return True
+    if t in _TRIVIAL_KB_FOLLOWUP_NORMALIZED:
+        return True
+    if t.startswith("please continue") and len(t) <= 48:
+        return True
+    if t.startswith("please proceed") and len(t) <= 48:
+        return True
+    return False
+
+
+def resolve_kb_user_question_for_index(
+    current_query: str,
+    conversation_history: list[dict[str, Any]] | None,
+) -> str:
+    """
+    Use the substantive user question for KB storage/embedding when the current message is
+    a continuation (e.g. after quota errors: 'Please continue').
+    """
+    q = (current_query or "").strip()
+    if not is_trivial_kb_followup(q):
+        return q
+    hist = conversation_history or []
+    for entry in reversed(hist):
+        if (entry.get("role") or "").strip().lower() != "user":
+            continue
+        content = (entry.get("content") or "").strip()
+        if not content or is_trivial_kb_followup(content):
+            continue
+        return content
+    return q
+
 
 def schema_fingerprint_from_schema(schema: dict) -> str:
     return hashlib.sha256(json.dumps(schema, sort_keys=True).encode("utf-8")).hexdigest()

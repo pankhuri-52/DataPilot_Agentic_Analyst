@@ -51,6 +51,7 @@ Your job:
    - metrics: what to measure (e.g. revenue, total_amount, units_sold, count of orders)
    - dimensions: what to group by (e.g. region, category, segment, product, date)
    - filters: any constraints (e.g. date range, status, region)
+   - result_limit: optional integer. Set to 1 when the user asks for a single winner (e.g. "name one brand", "which product sold the most", "who had the highest"). Set to N when they explicitly ask for top N. Omit or null when they want an open-ended comparison of all groups (no numeric cap).
 4. If INVALID for other reasons (too vague, off-topic, unclear): set is_valid=false and provide clarifying_questions to help the user refine.
 
 5. Always set query_scope to exactly one of:
@@ -131,9 +132,12 @@ def _normalize_execution_steps(plan_dict: dict) -> None:
         else:
             detail = None
         if phase in EXECUTION_PHASE_ORDER:
-            if not title:
-                title = DEFAULT_STEP_LABELS.get(phase, phase)
-            normalized.append({"phase": phase, "title": title, "detail": detail})
+            # Keep a custom title only for planner; later phases use fixed labels so the checklist
+            # does not stick on LLM phrases like "Generating SQL…" after the user has moved on.
+            step_title = DEFAULT_STEP_LABELS.get(phase, phase)
+            if phase == "planner" and title:
+                step_title = title
+            normalized.append({"phase": phase, "title": step_title, "detail": detail})
 
     phases_got = [s["phase"] for s in normalized]
     valid = len(normalized) == 6 and phases_got == list(EXECUTION_PHASE_ORDER)
@@ -274,6 +278,7 @@ def run_planner(state: dict) -> dict:
                         "metrics": plan_dict.get("metrics", []),
                         "dimensions": plan_dict.get("dimensions", []),
                         "filters": plan_dict.get("filters", {}),
+                        "result_limit": plan_dict.get("result_limit"),
                         "execution_steps": plan_dict.get("execution_steps", []),
                     },
                 ).model_dump(),
