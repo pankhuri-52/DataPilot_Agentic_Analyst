@@ -953,6 +953,11 @@ export function DataPilotClient() {
                     const showOutcomeCard =
                       !hasRows &&
                       (explanationText.length > 0 || !!emptyReason || !!res.chart_spec);
+                    const summaryDupesExplanation =
+                      !hasRows &&
+                      explanationText.length > 0 &&
+                      answerSummary.length > 0 &&
+                      explanationText === answerSummary;
                     return (
                       <div className="space-y-4">
                         {res.missing_explanation && (
@@ -996,7 +1001,7 @@ export function DataPilotClient() {
                           )}
                         {(answerSummary || followUps.length > 0) && (
                           <ResponseSummary
-                            answerSummary={answerSummary}
+                            answerSummary={summaryDupesExplanation ? "" : answerSummary}
                             followUpSuggestions={followUps}
                             onFollowUpClick={(text) => {
                               setQuery(text);

@@ -51,5 +51,7 @@ The default **retail / B2B POC model** includes dimensions and facts beyond core
 - **Planner structured output** – `AnalysisPlan` includes `query_scope` and `execution_steps` (six phases: planner → visualization); `PlanCard` is only for clarifying / out-of-scope messages.
 - **Supabase insert** – `create_conversation` / `create_message` use `.select(...)` after insert so rows are returned reliably.
 - **`metadata.json` vs warehouse** – Discovery uses `data_range` on date columns when present. After reseeding BigQuery (especially `02_dml_seed_enriched.sql`), update **`data_range` min/max** in `metadata.json` to match actual data or time-window checks will mislead the model.
+- **Query KB cache miss** – `match_query_kb` filters on **`dialect`** (e.g. `bigquery` vs `postgres`) and **`schema_fingerprint`** from `metadata.json`. Imported CSV rows with the wrong dialect or an outdated fingerprint never match; re-import after changing metadata or embedding rules. Tune **`QUERY_KB_MIN_SIMILARITY`** (default 0.78) and optional **`QUERY_KB_RELAXED_MIN_SIMILARITY`** (default 0.68 second pass; set to `none` to disable).
+- **PGRST202 on `match_query_kb` / `insert_query_kb_entry`** – Supabase PostgREST cannot see the RPCs: run migrations **`000_query_kb_entries.sql`** and **`003_query_kb.sql`**, then reload the API schema (Dashboard → Project Settings → API). Until then the app logs the error and continues with the full pipeline (no KB interrupt).
 
 When in doubt, read `main.py` around `_ask_stream_generator` and `DataPilotClient.tsx` SSE handlers first.

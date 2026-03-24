@@ -580,6 +580,7 @@ def _maybe_index_query_kb(last_state: dict, user_query: str) -> None:
         from agents.query_kb_helpers import (
             build_index_text,
             guess_columns_from_sql,
+            kb_embedding_match_text,
             result_preview_payload,
             schema_fingerprint_from_schema,
         )
@@ -600,7 +601,8 @@ def _maybe_index_query_kb(last_state: dict, user_query: str) -> None:
         tables_used = [str(t) for t in tables_used]
         cols = guess_columns_from_sql(str(sql))
         index_text = build_index_text(q, tables_used, cols)
-        doc_vec = embed_text(index_text, task_type="RETRIEVAL_DOCUMENT")
+        match_text = kb_embedding_match_text(q)
+        doc_vec = embed_text(match_text, task_type="RETRIEVAL_QUERY")
         preview = result_preview_payload(last_state.get("raw_results"))
         insert_kb_entry(
             executed_at=datetime.now(timezone.utc),

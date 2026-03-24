@@ -23,11 +23,19 @@ def build_index_text(user_question: str, tables: list[str], columns: list[str]) 
     )
 
 
+def kb_embedding_match_text(user_question: str) -> str:
+    """
+    Canonical string embedded at index time and at lookup time. Must stay identical on both paths
+    or the same user question will not match (previously, lookup used all schema tables while
+    indexing used only tables_used + guessed columns).
+    """
+    return f"User question: {(user_question or '').strip()}"
+
+
 def build_query_side_index_text(user_question: str, schema: dict) -> str:
-    table_names = sorted(
-        {str(t.get("name", "")).strip() for t in schema.get("tables", []) if t.get("name")}
-    )
-    return build_index_text(user_question, table_names, [])
+    """Deprecated for embeddings; use kb_embedding_match_text. Kept for callers/tests expecting schema arg."""
+    _ = schema
+    return kb_embedding_match_text(user_question)
 
 
 def guess_columns_from_sql(sql: str) -> list[str]:

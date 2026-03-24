@@ -96,13 +96,44 @@ def run_visualization(state: dict) -> dict:
         TraceEntry(agent="visualization", status="info", message="Preparing chart and explanation...").model_dump()
     )
 
-    if not raw_results:
+    # Adapt path: if live execute returned no rows, use KB-stored preview so charts/summary still render.
+    live_rows: list[dict] = list(raw_results) if raw_results else []
+    kb_preview = state.get("kb_result_preview") or {}
+    preview_rows_raw = kb_preview.get("rows") if isinstance(kb_preview, dict) else None
+    preview_rows: list[dict] = (
+        [dict(r) for r in preview_rows_raw if isinstance(r, dict)]
+        if isinstance(preview_rows_raw, list)
+        else []
+    )
+    used_kb_preview = bool(
+        state.get("from_query_cache_adapt") and not live_rows and preview_rows
+    )
+    effective_results: list[dict] = preview_rows if used_kb_preview else live_rows
+    if used_kb_preview:
+        append_trace(
+            trace,
+            TraceEntry(
+                agent="visualization",
+                status="info",
+                message=(
+                    "Live query returned no rows; using stored result preview from the knowledge base for "
+                    "visualization (verify SQL and warehouse data if this looks outdated)."
+                ),
+            ).model_dump(),
+        )
+
+    if not effective_results:
         append_trace(
             trace,
             TraceEntry(agent="visualization", status="info", message="No results to visualize").model_dump(),
         )
         explanation = "No data was returned for this query."
-        answer_summary = explanation
+        answer_summary = (
+            "No rows from the warehouse and no saved preview in the knowledge base for this Adapt path. "
+            "Try Re-run or fix the SQL / project id."
+            if state.get("from_query_cache_adapt") and not preview_rows
+            else explanation
+        )
         follow_up: list[str] = []
         # Use contextual explanation when data_range or empty_result_reason is available
         if data_range or empty_result_reason:
@@ -133,7 +164,7 @@ def run_visualization(state: dict) -> dict:
                 explanation = empty_result_reason or "No data was returned for this query."
                 answer_summary = explanation
                 follow_up = []
-        return {
+        out_empty = {
             "chart_spec": {"chart_type": "table", "title": "No data", "x_field": None, "y_field": None},
             "explanation": explanation,
             "answer_summary": answer_summary,
@@ -142,6 +173,7 @@ def run_visualization(state: dict) -> dict:
             "data_range": data_range,
             "empty_result_reason": empty_result_reason,
         }
+        return out_empty
 
     append_trace(
         trace,
@@ -150,8 +182,8 @@ def run_visualization(state: dict) -> dict:
 
     metrics = plan.get("metrics", [])
     dimensions = plan.get("dimensions", [])
-    columns = list(raw_results[0].keys()) if raw_results else []
-    results_sample = str(raw_results[:20])
+    columns = list(effective_results[0].keys()) if effective_results else []
+    results_sample = str(effective_results[:20])
 
     try:
         llm = get_gemini()
@@ -187,13 +219,16 @@ def run_visualization(state: dict) -> dict:
             ).model_dump(),
         )
 
-        return {
+        out: dict = {
             "chart_spec": chart_spec,
             "explanation": explanation,
             "answer_summary": answer_summary,
             "follow_up_suggestions": follow_up,
             "trace": trace,
         }
+        if used_kb_preview:
+            out["raw_results"] = effective_results
+        return out
     except Exception as e:
         append_trace(
             trace,

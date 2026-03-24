@@ -17,6 +17,15 @@ FORBIDDEN_SQL_PATTERNS = re.compile(
     re.IGNORECASE,
 )
 
+# Sample / CSV-imported KB SQL often uses this placeholder; substitute at execute time from .env.
+_KB_BQ_PROJECT_PLACEHOLDER = "__BIGQUERY_PROJECT__"
+
+
+def _resolve_bigquery_project_in_sql(sql: str, project_id: str) -> str:
+    if _KB_BQ_PROJECT_PLACEHOLDER not in sql:
+        return sql
+    return sql.replace(_KB_BQ_PROJECT_PLACEHOLDER, project_id)
+
 
 EXECUTOR_PROMPT_BIGQUERY = """Generate a BigQuery SQL query for the following analysis plan.
 
@@ -171,6 +180,23 @@ def run_executor(state: dict) -> dict:
             trace,
             TraceEntry(agent="executor", status="info", message="Executing query on database...").model_dump(),
         )
+
+        if connector.dialect == "bigquery" and _KB_BQ_PROJECT_PLACEHOLDER in sql:
+            project_id = (os.getenv("BIGQUERY_PROJECT_ID") or "").strip()
+            if not project_id or project_id == "your-gcp-project-id":
+                append_trace(
+                    trace,
+                    TraceEntry(
+                        agent="executor",
+                        status="error",
+                        message=(
+                            f"SQL contains {_KB_BQ_PROJECT_PLACEHOLDER}; set BIGQUERY_PROJECT_ID in .env "
+                            "to your real GCP project id (or replace the placeholder in the knowledge base SQL)."
+                        ),
+                    ).model_dump(),
+                )
+                return {"trace": trace}
+            sql = _resolve_bigquery_project_in_sql(sql, project_id)
 
         raw_results = connector.execute(sql)
 

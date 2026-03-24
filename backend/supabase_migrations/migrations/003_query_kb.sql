@@ -1,6 +1,6 @@
 -- Query Knowledge Base: RPCs for vector match and insert.
--- Prereq: enable extension "vector" (extensions schema) and create public.query_kb_entries
--- with embedding vector(768) — must match GEMINI_EMBEDDING_DIMENSION (default 768).
+-- Prereq: run 000_query_kb_entries.sql first (CREATE EXTENSION vector + query_kb_entries table).
+-- SECURITY DEFINER functions use search_path public, extensions so ::vector resolves (type lives in extensions).
 
 CREATE OR REPLACE FUNCTION public.match_query_kb(
   p_query_embedding text,
@@ -23,7 +23,7 @@ RETURNS TABLE (
 LANGUAGE sql
 STABLE
 SECURITY DEFINER
-SET search_path = public
+SET search_path = public, extensions
 AS $$
   SELECT
     e.id,
@@ -59,7 +59,7 @@ CREATE OR REPLACE FUNCTION public.insert_query_kb_entry(
 RETURNS uuid
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public
+SET search_path = public, extensions
 AS $$
 DECLARE
   new_id uuid;

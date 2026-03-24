@@ -10,8 +10,7 @@ from typing import Any
 from langgraph.types import interrupt
 
 from agents.query_kb_helpers import (
-    build_query_side_index_text,
-    guess_columns_from_sql,
+    kb_embedding_match_text,
     schema_fingerprint_from_schema,
 )
 from agents.schema_utils import load_schema
@@ -81,7 +80,7 @@ def run_query_kb(state: dict) -> dict:
         )
         return {"trace": trace}
 
-    index_text = build_query_side_index_text(query, schema)
+    match_text = kb_embedding_match_text(query)
 
     append_trace(
         trace,
@@ -90,10 +89,11 @@ def run_query_kb(state: dict) -> dict:
 
     try:
         from embeddings import embed_text
-        from query_kb_store import match_similar_queries
+        from query_kb_store import match_similar_queries_with_relaxation
 
-        q_vec = embed_text(index_text, task_type="RETRIEVAL_QUERY")
-        rows = match_similar_queries(q_vec, dialect, fingerprint)
+        # Same task type as _maybe_index_query_kb so query and stored rows live in one space.
+        q_vec = embed_text(match_text, task_type="RETRIEVAL_QUERY")
+        rows, match_tag = match_similar_queries_with_relaxation(q_vec, dialect, fingerprint)
     except Exception as e:
         logger.warning("query_kb lookup failed: %s", e)
         append_trace(
@@ -102,12 +102,39 @@ def run_query_kb(state: dict) -> dict:
         )
         return {"trace": trace}
 
+    if match_tag == "rpc_error":
+        append_trace(
+            trace,
+            TraceEntry(
+                agent="query_kb",
+                status="error",
+                message=(
+                    "Query KB RPC missing in Supabase (PostgREST PGRST202). Run SQL migrations "
+                    "000_query_kb_entries.sql then 003_query_kb.sql, then reload API schema — see backend logs."
+                ),
+            ).model_dump(),
+        )
+        return {"trace": trace}
+
     if not rows:
+        logger.info(
+            "query_kb: no KB match (dialect=%r fingerprint=%s… rows need same dialect + fingerprint as this app; "
+            "re-import KB after metadata.json changes; check QUERY_KB_MIN_SIMILARITY).",
+            dialect,
+            fingerprint[:16],
+        )
         append_trace(
             trace,
             TraceEntry(agent="query_kb", status="success", message="No similar past query found.").model_dump(),
         )
         return {"trace": trace}
+
+    if match_tag == "relaxed":
+        sim0 = float(rows[0].get("similarity") or 0)
+        logger.warning(
+            "query_kb: using relaxed similarity match (%.3f) — tighten QUERY_KB_MIN_SIMILARITY or re-embed KB rows if this is wrong",
+            sim0,
+        )
 
     best = rows[0]
     similarity = float(best.get("similarity") or 0)
@@ -177,6 +204,7 @@ def run_query_kb(state: dict) -> dict:
             "nearest_plan": None,
             "missing_explanation": None,
             "from_query_cache_adapt": True,
+            "kb_result_preview": best.get("result_preview") or {},
         }
 
     append_trace(

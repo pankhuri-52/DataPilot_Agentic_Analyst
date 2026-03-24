@@ -11,9 +11,12 @@
 ## 2. Run the migration
 
 In the Supabase SQL Editor, run the migrations in order:
-1. `migrations/001_conversations.sql` – creates `conversations` and `messages` tables, indexes, RLS.
-2. `migrations/002_chat_schema_docs.sql` – adds schema comments (optional).
-3. `migrations/003_query_kb.sql` – RPCs `match_query_kb` and `insert_query_kb_entry` for the query knowledge base. Requires the `vector` extension and a `public.query_kb_entries` table whose `embedding` column size matches `GEMINI_EMBEDDING_DIMENSION` (default **768**).
+1. `migrations/000_query_kb_entries.sql` – enables `vector` and creates `public.query_kb_entries` (`embedding vector(768)`).
+2. `migrations/001_conversations.sql` – creates `conversations` and `messages` tables, indexes, RLS.
+3. `migrations/002_chat_schema_docs.sql` – adds schema comments (optional).
+4. `migrations/003_query_kb.sql` – RPCs `match_query_kb` and `insert_query_kb_entry`. **Run after** `000` (table must exist).
+
+**If the backend logs PostgREST `PGRST202`** (“Could not find the function `public.match_query_kb` … in the schema cache”): the RPCs are missing or PostgREST has not reloaded. Re-run `003_query_kb.sql`, then in **Project Settings → API** choose **Reload schema** (or wait a minute). Until this works, the app never matches the knowledge base and always runs the full agent pipeline.
 
 Or use the Supabase CLI:
 
