@@ -7,7 +7,7 @@ import logging
 import os
 import uuid
 from datetime import datetime, timezone
-from fastapi import FastAPI, HTTPException, Body, Depends, Header
+from fastapi import FastAPI, HTTPException, Body, Depends, Header, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
@@ -243,6 +243,14 @@ def _chat_error_detail(exc: BaseException) -> str:
             "backend/supabase_migrations/migrations/001_conversations.sql in the Supabase SQL Editor "
             "(see backend/supabase_migrations/README.md)."
         )
+    if "get_user_frequent_questions" in low and (
+        "pgrst202" in low or "could not find" in low or "not found" in low
+    ):
+        return (
+            "Frequent-question RPC is missing. Run "
+            "backend/supabase_migrations/migrations/005_user_frequent_questions.sql in the Supabase SQL Editor, "
+            "then reload the API schema (Project Settings → API → Reload schema)."
+        )
     if "conversations" in low and ("relation" in low or "does not exist" in low):
         return (
             f"{raw} — Run backend/supabase_migrations/migrations/001_conversations.sql in the Supabase SQL Editor."
@@ -288,6 +296,34 @@ def create_conversation(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.exception("create_conversation failed")
+        raise HTTPException(status_code=503, detail=_chat_error_detail(e))
+
+
+@app.get("/conversations/frequent-questions")
+def get_frequent_questions(
+    user=Depends(_require_user),
+    limit: int = Query(3, ge=1, le=10),
+):
+    """Top repeated questions for the signed-in user (for new-chat suggestions)."""
+    try:
+        from supabase_service import frequent_user_questions as _frequent
+
+        rows = _frequent(user["id"], limit)
+        out = []
+        for row in rows:
+            text = (row.get("display_text") or "").strip()
+            if not text:
+                continue
+            try:
+                n = int(row.get("ask_count") or 0)
+            except (TypeError, ValueError):
+                n = 0
+            out.append({"question": text, "ask_count": n})
+        return {"questions": out}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception("get_frequent_questions failed")
         raise HTTPException(status_code=503, detail=_chat_error_detail(e))
 
 

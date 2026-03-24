@@ -282,6 +282,22 @@ def create_message(
     return retry_sync("supabase.chat.create_message", _run)
 
 
+def frequent_user_questions(user_id: str, limit: int = 3) -> list[dict[str, Any]]:
+    """Top repeated user message texts for this user (normalized by lower(trim(content)))."""
+
+    lim = max(1, min(int(limit), 20))
+
+    def _run():
+        client = _get_service_client()
+        response = client.rpc(
+            "get_user_frequent_questions",
+            {"p_user_id": str(user_id), "p_limit": lim},
+        ).execute()
+        return [dict(row) for row in (response.data or [])]
+
+    return retry_sync("supabase.chat.frequent_user_questions", _run)
+
+
 def update_conversation_title(conversation_id: str, user_id: str, title: str) -> None:
     """Update conversation title."""
 

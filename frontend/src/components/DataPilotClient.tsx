@@ -118,6 +118,10 @@ export function DataPilotClient() {
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [frequentQuestions, setFrequentQuestions] = useState<
+    { question: string; ask_count: number }[]
+  >([]);
+  const [frequentLoading, setFrequentLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const queryInputRef = useRef<HTMLInputElement>(null);
   /** Prevents double-submit before React commits loading/currentConversationId (avoids duplicate conversations). */
@@ -132,6 +136,42 @@ export function DataPilotClient() {
     const id = window.setTimeout(() => scrollToBottom(), 100);
     return () => clearTimeout(id);
   }, [messages]);
+
+  useEffect(() => {
+    if (!user || currentConversationId !== null || messages.length > 0) return;
+    const token = getAccessToken();
+    if (!token) return;
+    let cancelled = false;
+    setFrequentLoading(true);
+    fetchWithRetry(
+      `${API_BASE}/conversations/frequent-questions?limit=3`,
+      { headers: { Authorization: `Bearer ${token}` } },
+      { logLabel: "GET /conversations/frequent-questions" }
+    )
+      .then(async (res) => {
+        if (cancelled || !res.ok) return;
+        const data = (await res.json()) as {
+          questions?: { question?: string; ask_count?: number }[];
+        };
+        const raw = data.questions ?? [];
+        const next = raw
+          .map((row) => ({
+            question: (row.question ?? "").trim(),
+            ask_count: Number(row.ask_count) || 0,
+          }))
+          .filter((row) => row.question.length > 0);
+        setFrequentQuestions(next);
+      })
+      .catch(() => {
+        if (!cancelled) setFrequentQuestions([]);
+      })
+      .finally(() => {
+        if (!cancelled) setFrequentLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [user, currentConversationId, messages.length, getAccessToken]);
 
   /** User text for the turn that owns this assistant bubble (for persistence on /ask/continue). */
   function precedingUserContent(convKey: string, assistantMessageId: string): string {
@@ -658,13 +698,39 @@ export function DataPilotClient() {
     <div className="flex flex-1 flex-col min-w-0">
       <div className="space-y-6 pb-24">
         {messages.length === 0 && (
-          <div className="flex flex-col items-center justify-center py-16 text-center">
+          <div className="flex max-w-lg flex-col items-center justify-center px-2 py-16 text-center mx-auto">
             <p className="text-sm text-muted-foreground">
               Hey {displayName}, ask me a question and I&apos;ll help you find answers from our database.
             </p>
-            <p className="mt-1 text-xs text-muted-foreground/80">
-              Try: &quot;What were total sales by region last month?&quot;
-            </p>
+            {user && !frequentLoading && frequentQuestions.length > 0 && (
+              <>
+                <p className="mt-4 text-sm leading-relaxed text-muted-foreground">
+                  Looks like you&apos;ve been here before. Here&apos;s what you were up to.
+                </p>
+                <div className="mt-3 flex flex-wrap justify-center gap-2">
+                  {frequentQuestions.map((item) => (
+                    <Button
+                      key={item.question}
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-auto min-h-9 max-w-full cursor-pointer whitespace-normal px-3 py-2 text-left text-xs font-normal"
+                      onClick={() => {
+                        setQuery(item.question);
+                        queryInputRef.current?.focus();
+                      }}
+                    >
+                      {item.question}
+                    </Button>
+                  ))}
+                </div>
+              </>
+            )}
+            {(!user || frequentLoading || frequentQuestions.length === 0) && (
+              <p className="mt-1 text-xs text-muted-foreground/80">
+                Try: &quot;What were total sales by region last month?&quot;
+              </p>
+            )}
             {!user && (
               <p className="mt-3 text-xs text-amber-600 dark:text-amber-500">
                 Sign in to save your chat history and access it later.
