@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useCallback, useEffect, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { cn } from "@/lib/utils";
 import {
   MessageSquarePlus,
@@ -27,12 +27,20 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 const SIDEBAR_CHATS_MAX = 12;
 const SIDEBAR_STORAGE_KEY = "datapilot_sidebar_collapsed";
 const CHATS_SECTION_STORAGE_KEY = "datapilot_sidebar_chats_expanded";
+const SIDEBAR_WIDTH_STORAGE_KEY = "datapilot_sidebar_width_px";
+const SIDEBAR_WIDTH_DEFAULT = 224; /* 14rem */
+const SIDEBAR_WIDTH_MIN = 192; /* 12rem */
+const SIDEBAR_WIDTH_MAX = 384; /* 24rem */
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [chatsExpanded, setChatsExpanded] = useState(false);
+  const [sidebarWidthPx, setSidebarWidthPx] = useState(SIDEBAR_WIDTH_DEFAULT);
+  const [isResizing, setIsResizing] = useState(false);
+  const resizeDragRef = useRef<{ startX: number; startW: number } | null>(null);
+  const latestWidthRef = useRef(SIDEBAR_WIDTH_DEFAULT);
 
   useEffect(() => {
     try {
@@ -42,6 +50,24 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       /* ignore */
     }
   }, []);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY);
+      if (!raw) return;
+      const n = Number.parseInt(raw, 10);
+      if (Number.isNaN(n)) return;
+      const clamped = Math.min(SIDEBAR_WIDTH_MAX, Math.max(SIDEBAR_WIDTH_MIN, n));
+      setSidebarWidthPx(clamped);
+      latestWidthRef.current = clamped;
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  useEffect(() => {
+    latestWidthRef.current = sidebarWidthPx;
+  }, [sidebarWidthPx]);
 
   useEffect(() => {
     try {
@@ -141,7 +167,58 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     if (pathname !== "/") router.push("/");
   };
 
-  const sidebarWidth = sidebarCollapsed ? "3.5rem" : "14rem";
+  const sidebarWidth = sidebarCollapsed ? "3.5rem" : `${sidebarWidthPx}px`;
+
+  const onSidebarResizePointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (sidebarCollapsed) return;
+      e.preventDefault();
+      e.stopPropagation();
+      resizeDragRef.current = { startX: e.clientX, startW: latestWidthRef.current };
+      setIsResizing(true);
+      e.currentTarget.setPointerCapture(e.pointerId);
+    },
+    [sidebarCollapsed]
+  );
+
+  const onSidebarResizePointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const drag = resizeDragRef.current;
+    if (!drag) return;
+    const dx = e.clientX - drag.startX;
+    const next = Math.min(
+      SIDEBAR_WIDTH_MAX,
+      Math.max(SIDEBAR_WIDTH_MIN, drag.startW + dx)
+    );
+    latestWidthRef.current = next;
+    setSidebarWidthPx(next);
+  }, []);
+
+  const onSidebarResizePointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (resizeDragRef.current) {
+      try {
+        localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(latestWidthRef.current));
+      } catch {
+        /* ignore */
+      }
+    }
+    resizeDragRef.current = null;
+    setIsResizing(false);
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      /* already released */
+    }
+  }, []);
+
+  const onSidebarResizePointerCancel = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    resizeDragRef.current = null;
+    setIsResizing(false);
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      /* ignore */
+    }
+  }, []);
 
   return (
     <div
@@ -154,7 +231,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     >
       <aside
         className={cn(
-          "fixed left-0 top-0 z-30 flex h-full w-[var(--sidebar-width)] flex-col border-r border-border bg-sidebar/95 backdrop-blur transition-[width] duration-200 ease-out supports-[backdrop-filter]:bg-sidebar/80 overflow-hidden"
+          "fixed left-0 top-0 z-30 flex h-full w-[var(--sidebar-width)] flex-col overflow-hidden border-r border-border bg-sidebar/95 backdrop-blur supports-[backdrop-filter]:bg-sidebar/80",
+          !isResizing && "transition-[width] duration-200 ease-out"
         )}
       >
         <div
@@ -164,7 +242,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           )}
         >
           {!sidebarCollapsed && (
-            <span className="min-w-0 flex-1 truncate font-display text-lg font-semibold tracking-tight text-foreground">
+            <span className="min-w-0 flex-1 truncate font-display text-base font-semibold tracking-tight text-foreground">
               DataPilot
             </span>
           )}
@@ -426,8 +504,34 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             </>
           )}
         </div>
+        {!sidebarCollapsed && (
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize sidebar"
+            title="Drag to resize sidebar"
+            className={cn(
+              "absolute right-0 top-0 z-40 h-full w-3 shrink-0 cursor-col-resize touch-none select-none",
+              "hover:bg-primary/10 active:bg-primary/15"
+            )}
+            onPointerDown={onSidebarResizePointerDown}
+            onPointerMove={onSidebarResizePointerMove}
+            onPointerUp={onSidebarResizePointerUp}
+            onPointerCancel={onSidebarResizePointerCancel}
+          >
+            <span
+              className="pointer-events-none absolute right-1 top-0 h-full w-px bg-border/80"
+              aria-hidden
+            />
+          </div>
+        )}
       </aside>
-      <main className="flex-1 pl-[var(--sidebar-width)] transition-[padding-left] duration-200 ease-out">
+      <main
+        className={cn(
+          "flex-1 pl-[var(--sidebar-width)]",
+          !isResizing && "transition-[padding-left] duration-200 ease-out"
+        )}
+      >
         {children}
       </main>
     </div>

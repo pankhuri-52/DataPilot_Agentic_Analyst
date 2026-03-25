@@ -298,6 +298,22 @@ def frequent_user_questions(user_id: str, limit: int = 3) -> list[dict[str, Any]
     return retry_sync("supabase.chat.frequent_user_questions", _run)
 
 
+def recent_user_questions(user_id: str, limit: int = 10) -> list[dict[str, Any]]:
+    """Distinct user questions, most recently touched first (normalized by lower(trim(content)))."""
+
+    lim = max(1, min(int(limit), 30))
+
+    def _run():
+        client = _get_service_client()
+        response = client.rpc(
+            "get_user_recent_questions",
+            {"p_user_id": str(user_id), "p_limit": lim},
+        ).execute()
+        return [dict(row) for row in (response.data or [])]
+
+    return retry_sync("supabase.chat.recent_user_questions", _run)
+
+
 def update_conversation_title(conversation_id: str, user_id: str, title: str) -> None:
     """Update conversation title."""
 

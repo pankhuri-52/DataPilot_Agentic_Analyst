@@ -251,6 +251,14 @@ def _chat_error_detail(exc: BaseException) -> str:
             "backend/supabase_migrations/migrations/005_user_frequent_questions.sql in the Supabase SQL Editor, "
             "then reload the API schema (Project Settings → API → Reload schema)."
         )
+    if "get_user_recent_questions" in low and (
+        "pgrst202" in low or "could not find" in low or "not found" in low
+    ):
+        return (
+            "Recent-question RPC is missing. Run "
+            "backend/supabase_migrations/migrations/006_user_recent_questions.sql in the Supabase SQL Editor, "
+            "then reload the API schema (Project Settings → API → Reload schema)."
+        )
     if "conversations" in low and ("relation" in low or "does not exist" in low):
         return (
             f"{raw} — Run backend/supabase_migrations/migrations/001_conversations.sql in the Supabase SQL Editor."
@@ -324,6 +332,29 @@ def get_frequent_questions(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.exception("get_frequent_questions failed")
+        raise HTTPException(status_code=503, detail=_chat_error_detail(e))
+
+
+@app.get("/conversations/suggested-questions")
+def get_suggested_questions(
+    user=Depends(_require_user),
+    limit: int = Query(5, ge=1, le=8),
+    include_kb: bool = Query(True),
+):
+    """
+    RAG-style personalized prompts: chat history (+ optional query KB) + Gemini.
+    See AGENTS.md: SUGGESTED_QUESTIONS_* env vars.
+    """
+    try:
+        from suggested_questions import build_suggested_questions
+
+        return build_suggested_questions(
+            user["id"],
+            suggestion_limit=limit,
+            include_kb=include_kb,
+        )
+    except Exception as e:
+        logger.exception("get_suggested_questions failed")
         raise HTTPException(status_code=503, detail=_chat_error_detail(e))
 
 

@@ -4,7 +4,7 @@ import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { AlertCircle, Send, Loader2 } from "lucide-react";
+import { AlertCircle, Send, Loader2, Sparkles } from "lucide-react";
 import { PlanCard } from "./PlanCard";
 import { ArtifactCard } from "./ArtifactCard";
 import { ExecutionPlanPanel } from "./ExecutionPlanPanel";
@@ -116,10 +116,14 @@ export function DataPilotClient() {
     upsertConversation,
     composerQuerySeed,
     clearComposerQuerySeed,
+    requestComposerQuery,
   } = useChat();
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [suggestedQuestions, setSuggestedQuestions] = useState<string[]>([]);
+  const [suggestedSource, setSuggestedSource] = useState<string | null>(null);
+  const [suggestedLoading, setSuggestedLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const queryInputRef = useRef<HTMLInputElement>(null);
   /** Prevents double-submit before React commits loading/currentConversationId (avoids duplicate conversations). */
@@ -142,6 +146,55 @@ export function DataPilotClient() {
     const id = requestAnimationFrame(() => queryInputRef.current?.focus());
     return () => cancelAnimationFrame(id);
   }, [composerQuerySeed, clearComposerQuerySeed]);
+
+  useEffect(() => {
+    if (!user) {
+      setSuggestedQuestions([]);
+      setSuggestedSource(null);
+      setSuggestedLoading(false);
+      return;
+    }
+    const token = getAccessToken();
+    if (!token) {
+      setSuggestedQuestions([]);
+      setSuggestedSource(null);
+      return;
+    }
+    let cancelled = false;
+    setSuggestedLoading(true);
+    fetchWithRetry(
+      `${API_BASE}/conversations/suggested-questions?limit=5&include_kb=true`,
+      { headers: { Authorization: `Bearer ${token}` } },
+      { logLabel: "GET /conversations/suggested-questions" }
+    )
+      .then(async (res) => {
+        if (cancelled || !res.ok) return;
+        const data = (await res.json()) as {
+          suggestions?: string[];
+          source?: string;
+        };
+        const src = typeof data.source === "string" ? data.source : "";
+        const raw = data.suggestions ?? [];
+        const next = raw
+          .map((s) => (typeof s === "string" ? s.trim() : ""))
+          .filter((s) => s.length > 0);
+        if (cancelled) return;
+        setSuggestedSource(src || null);
+        setSuggestedQuestions(next);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setSuggestedQuestions([]);
+          setSuggestedSource(null);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setSuggestedLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [user, getAccessToken]);
 
   /** User text for the turn that owns this assistant bubble (for persistence on /ask/continue). */
   function precedingUserContent(convKey: string, assistantMessageId: string): string {
@@ -667,17 +720,109 @@ export function DataPilotClient() {
   return (
     <div className="flex flex-1 flex-col min-w-0">
       <div className="space-y-6 pb-24">
+        {user && messages.length > 0 && (suggestedLoading || suggestedQuestions.length > 0) && (
+          <div
+            className={cn(
+              "sticky top-0 z-10 mx-auto w-full max-w-xl rounded-xl border border-primary/20 bg-primary/5 px-4 py-4 text-left shadow-sm backdrop-blur-sm",
+              "dark:border-primary/30 dark:bg-primary/10 supports-[backdrop-filter]:bg-primary/5"
+            )}
+          >
+            <div className="flex items-start gap-2">
+              <Sparkles
+                className="mt-0.5 size-4 shrink-0 text-primary"
+                aria-hidden
+              />
+              <div className="min-w-0 flex-1 space-y-1">
+                <p className="text-sm font-medium text-foreground">
+                  {suggestedSource === "generic"
+                    ? "Try asking"
+                    : "Based on your past questions"}
+                </p>
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  {suggestedSource === "generic"
+                    ? "Starter questions that fit this warehouse."
+                    : "Suggestions use your chat history and, when available, similar successful queries we've saved — then we generate fresh ideas with AI."}
+                </p>
+              </div>
+            </div>
+            {suggestedLoading && (
+              <p className="mt-3 text-xs text-muted-foreground">Loading ideas…</p>
+            )}
+            {!suggestedLoading && suggestedQuestions.length > 0 && (
+              <ul className="mt-3 space-y-2">
+                {suggestedQuestions.map((q, i) => (
+                  <li key={`${i}-${q.slice(0, 64)}`}>
+                    <button
+                      type="button"
+                      onClick={() => requestComposerQuery(q)}
+                      className={cn(
+                        "w-full rounded-lg border border-border/80 bg-background/80 px-3 py-2.5 text-left text-xs leading-snug",
+                        "text-foreground transition-colors hover:border-primary/40 hover:bg-accent/50",
+                        "dark:bg-background/40"
+                      )}
+                    >
+                      {q}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+
         {messages.length === 0 && (
-          <div className="flex max-w-lg flex-col items-center justify-center px-2 py-16 text-center mx-auto">
-            <p className="text-sm text-muted-foreground">
-              Hey {displayName}, ask me a question and I&apos;ll help you find answers from our database.
-            </p>
-            <p className="mt-4 text-xs text-muted-foreground/80">
-              Try: &quot;What were total sales by region last month?&quot;
-            </p>
-            {!user && (
-              <p className="mt-3 text-xs text-amber-600 dark:text-amber-500">
-                Sign in to save your chat history and access it later.
+          <div className="mx-auto flex w-full max-w-xl flex-col items-center px-2 py-8 text-center sm:py-12">
+            <h2 className="font-display text-lg font-semibold tracking-tight text-foreground sm:text-xl">
+              {`Hey ${displayName}, what would you like to explore today?`}
+            </h2>
+            {user ? (
+              <>
+                <p className="mt-2 max-w-md text-xs text-muted-foreground sm:text-sm">
+                  Here are some questions you might want to ask based on your history
+                </p>
+                {suggestedLoading && (
+                  <ul
+                    className="mt-6 w-full max-w-full space-y-2 text-left"
+                    aria-busy="true"
+                    aria-label="Loading suggestions"
+                  >
+                    {[0, 1, 2].map((i) => (
+                      <li key={i}>
+                        <div
+                          className={cn(
+                            "h-10 w-full rounded-lg border border-border/70 bg-muted/50",
+                            "animate-pulse"
+                          )}
+                        />
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {!suggestedLoading && suggestedQuestions.length > 0 && (
+                  <ul className="mt-6 w-full space-y-2 text-left">
+                    {suggestedQuestions.map((q, i) => (
+                      <li key={`${i}-${q.slice(0, 64)}`}>
+                        <button
+                          type="button"
+                          onClick={() => requestComposerQuery(q)}
+                          className={cn(
+                            "w-full rounded-lg border border-border bg-background px-3 py-2 text-left text-xs leading-snug text-foreground sm:text-sm",
+                            "shadow-sm transition-colors",
+                            "hover:border-primary/50 hover:bg-accent/40",
+                            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+                            "dark:bg-background/80"
+                          )}
+                        >
+                          {q}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </>
+            ) : (
+              <p className="mt-2 max-w-sm text-xs text-muted-foreground sm:text-sm">
+                Sign in to save your chat history and get personalized suggestions.
               </p>
             )}
           </div>

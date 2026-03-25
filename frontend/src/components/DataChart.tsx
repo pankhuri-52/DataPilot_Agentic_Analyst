@@ -30,6 +30,8 @@ interface DataChartProps {
   chartSpec: ChartSpec;
   /** Optional table to render when chart_type is "table" or as fallback */
   renderTable?: () => React.ReactNode;
+  /** Use fixed hex colors so exports (e.g. PDF) capture reliably */
+  colorPalette?: "theme" | "export";
 }
 
 const CHART_COLORS = [
@@ -40,13 +42,21 @@ const CHART_COLORS = [
   "var(--chart-5)",
 ];
 
+/** Solid colors for PDF / html2canvas (CSS variables often rasterize poorly). */
+const EXPORT_CHART_COLORS = ["#2563eb", "#16a34a", "#d97706", "#7c3aed", "#db2777"];
+
 function formatLabel(value: unknown): string {
   if (value === null || value === undefined) return "";
   if (typeof value === "number") return value.toLocaleString();
   return String(value);
 }
 
-export function DataChart({ results, chartSpec, renderTable }: DataChartProps) {
+export function DataChart({ results, chartSpec, renderTable, colorPalette = "theme" }: DataChartProps) {
+  const palette = colorPalette === "export" ? EXPORT_CHART_COLORS : CHART_COLORS;
+  const axisTickFill = colorPalette === "export" ? "#64748b" : "var(--muted-foreground)";
+  const gridStroke = colorPalette === "export" ? "#e2e8f0" : "var(--border)";
+  const cardBg = colorPalette === "export" ? "#ffffff" : "var(--card)";
+  const cardBorder = colorPalette === "export" ? "#e2e8f0" : "var(--border)";
   const chartType = (chartSpec.chart_type || "table").toLowerCase();
   const xField = chartSpec.x_field ?? "";
   const yField = chartSpec.y_field ?? "";
@@ -70,28 +80,28 @@ export function DataChart({ results, chartSpec, renderTable }: DataChartProps) {
       <div className="h-[320px] w-full">
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={chartData} margin={{ top: 8, right: 8, left: 8, bottom: 8 }}>
-            <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+            <CartesianGrid strokeDasharray="3 3" stroke={gridStroke} />
             <XAxis
               dataKey={xKey}
               tickFormatter={formatLabel}
               className="text-xs"
-              tick={{ fill: "var(--muted-foreground)" }}
+              tick={{ fill: axisTickFill }}
             />
             <YAxis
               tickFormatter={formatLabel}
               className="text-xs"
-              tick={{ fill: "var(--muted-foreground)" }}
+              tick={{ fill: axisTickFill }}
             />
             <Tooltip
               formatter={(value: unknown) => [formatLabel(value), yKey]}
               labelFormatter={formatLabel}
               contentStyle={{
-                backgroundColor: "var(--card)",
-                border: "1px solid var(--border)",
-                borderRadius: "var(--radius)",
+                backgroundColor: cardBg,
+                border: `1px solid ${cardBorder}`,
+                borderRadius: 8,
               }}
             />
-            <Bar dataKey={yKey} fill={CHART_COLORS[0]} radius={[4, 4, 0, 0]} />
+            <Bar dataKey={yKey} fill={palette[0]} radius={[4, 4, 0, 0]} />
           </BarChart>
         </ResponsiveContainer>
       </div>
@@ -106,36 +116,36 @@ export function DataChart({ results, chartSpec, renderTable }: DataChartProps) {
           <ChartComponent data={chartData} margin={{ top: 8, right: 8, left: 8, bottom: 8 }}>
             <defs>
               <linearGradient id="areaGradient" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor={CHART_COLORS[0]} stopOpacity={0.3} />
-                <stop offset="100%" stopColor={CHART_COLORS[0]} stopOpacity={0} />
+                <stop offset="0%" stopColor={palette[0]} stopOpacity={0.3} />
+                <stop offset="100%" stopColor={palette[0]} stopOpacity={0} />
               </linearGradient>
             </defs>
-            <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" opacity={0.5} />
+            <CartesianGrid strokeDasharray="3 3" stroke={gridStroke} opacity={0.5} />
             <XAxis
               dataKey={xKey}
               tickFormatter={formatLabel}
               className="text-xs"
-              tick={{ fill: "var(--muted-foreground)" }}
+              tick={{ fill: axisTickFill }}
             />
             <YAxis
               tickFormatter={formatLabel}
               className="text-xs"
-              tick={{ fill: "var(--muted-foreground)" }}
+              tick={{ fill: axisTickFill }}
             />
             <Tooltip
               formatter={(value: unknown) => [formatLabel(value), yKey]}
               labelFormatter={formatLabel}
               contentStyle={{
-                backgroundColor: "var(--card)",
-                border: "1px solid var(--border)",
-                borderRadius: "var(--radius)",
+                backgroundColor: cardBg,
+                border: `1px solid ${cardBorder}`,
+                borderRadius: 8,
               }}
             />
             {chartType === "area" ? (
               <Area
                 type="monotone"
                 dataKey={yKey}
-                stroke={CHART_COLORS[0]}
+                stroke={palette[0]}
                 strokeWidth={2}
                 fill="url(#areaGradient)"
               />
@@ -143,9 +153,9 @@ export function DataChart({ results, chartSpec, renderTable }: DataChartProps) {
               <Line
                 type="monotone"
                 dataKey={yKey}
-                stroke={CHART_COLORS[0]}
+                stroke={palette[0]}
                 strokeWidth={2}
-                dot={{ fill: CHART_COLORS[0] }}
+                dot={{ fill: palette[0] }}
               />
             )}
           </ChartComponent>
@@ -181,15 +191,15 @@ export function DataChart({ results, chartSpec, renderTable }: DataChartProps) {
               }
             >
               {pieData.map((_, index) => (
-                <Cell key={index} fill={CHART_COLORS[index % CHART_COLORS.length]} />
+                <Cell key={index} fill={palette[index % palette.length]} />
               ))}
             </Pie>
             <Tooltip
               formatter={(value: unknown) => formatLabel(value)}
               contentStyle={{
-                backgroundColor: "var(--card)",
-                border: "1px solid var(--border)",
-                borderRadius: "var(--radius)",
+                backgroundColor: cardBg,
+                border: `1px solid ${cardBorder}`,
+                borderRadius: 8,
               }}
             />
             <Legend />

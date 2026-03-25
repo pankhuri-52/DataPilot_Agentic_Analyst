@@ -14,7 +14,8 @@ The default **retail / B2B POC model** includes dimensions and facts beyond core
 
 | Path | Role |
 |------|------|
-| `backend/main.py` | FastAPI routes: `/ask`, `/ask/stream`, `/ask/continue`, auth, conversations, `/data-sources/status` |
+| `backend/main.py` | FastAPI routes: `/ask`, `/ask/stream`, `/ask/continue`, auth, conversations, `/conversations/suggested-questions`, `/data-sources/status` |
+| `backend/suggested_questions.py` | Personalized new-chat suggestions: chat history + optional query KB retrieval + Gemini (`GET /conversations/suggested-questions`) |
 | `backend/agents/` | LangGraph nodes: `graph.py`, `planner.py`, `discovery.py`, `optimizer.py`, `executor.py`, `validator.py`, `visualization.py` |
 | `backend/agents/state.py` | `DataPilotState`, Pydantic models (`AnalysisPlan`, …) |
 | `backend/db/factory.py` | Picks BigQuery vs Postgres connector |
@@ -53,5 +54,6 @@ The default **retail / B2B POC model** includes dimensions and facts beyond core
 - **`metadata.json` vs warehouse** – Discovery uses `data_range` on date columns when present. After reseeding BigQuery (especially `02_dml_seed_enriched.sql`), update **`data_range` min/max** in `metadata.json` to match actual data or time-window checks will mislead the model.
 - **Query KB cache miss** – `match_query_kb` filters on **`dialect`** (e.g. `bigquery` vs `postgres`) and **`schema_fingerprint`** from `metadata.json`. Imported CSV rows with the wrong dialect or an outdated fingerprint never match; re-import after changing metadata or embedding rules. Tune **`QUERY_KB_MIN_SIMILARITY`** (default 0.78) and optional **`QUERY_KB_RELAXED_MIN_SIMILARITY`** (default 0.68 second pass; set to `none` to disable).
 - **PGRST202 on `match_query_kb` / `insert_query_kb_entry`** – Supabase PostgREST cannot see the RPCs: run migrations **`000_query_kb_entries.sql`** and **`003_query_kb.sql`**, then reload the API schema (Dashboard → Project Settings → API). Until then the app logs the error and continues with the full pipeline (no KB interrupt).
+- **Suggested questions (`/conversations/suggested-questions`)** – Uses `get_user_frequent_questions` (migration **`005_user_frequent_questions.sql`**) and `get_user_recent_questions` (**`006_user_recent_questions.sql`**). If the recent RPC is missing, the backend falls back without recent context. Env toggles (hackathon quota): **`SUGGESTED_QUESTIONS_ENABLED`** (default `1`; set `0` to return empty suggestions), **`SUGGESTED_QUESTIONS_LLM`** (default `1`; set `0` to skip all Gemini calls for this feature — no embeddings for KB match and no suggestion model; falls back to history-only or generic list), **`SUGGESTED_QUESTIONS_INCLUDE_KB`** (default `1`; set `0` or pass `?include_kb=false` to skip query-KB retrieval + embedding call when LLM is enabled), **`SUGGESTED_QUESTIONS_CACHE_TTL_SEC`** (default `600`; set `0` to disable in-process cache per user).
 
 When in doubt, read `main.py` around `_ask_stream_generator` and `DataPilotClient.tsx` SSE handlers first.
