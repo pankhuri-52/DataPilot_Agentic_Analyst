@@ -17,6 +17,7 @@ import {
   Cell,
   Legend,
 } from "recharts";
+import { cn } from "@/lib/utils";
 
 export interface ChartSpec {
   chart_type: string;
@@ -32,6 +33,8 @@ interface DataChartProps {
   renderTable?: () => React.ReactNode;
   /** Use fixed hex colors so exports (e.g. PDF) capture reliably */
   colorPalette?: "theme" | "export";
+  /** Override chart viewport height (default h-[320px]; PDF export uses a taller capture). */
+  chartHeightClassName?: string;
 }
 
 const CHART_COLORS = [
@@ -51,8 +54,15 @@ function formatLabel(value: unknown): string {
   return String(value);
 }
 
-export function DataChart({ results, chartSpec, renderTable, colorPalette = "theme" }: DataChartProps) {
+export function DataChart({
+  results,
+  chartSpec,
+  renderTable,
+  colorPalette = "theme",
+  chartHeightClassName = "h-[320px]",
+}: DataChartProps) {
   const palette = colorPalette === "export" ? EXPORT_CHART_COLORS : CHART_COLORS;
+  const hWrap = chartHeightClassName;
   const axisTickFill = colorPalette === "export" ? "#64748b" : "var(--muted-foreground)";
   const gridStroke = colorPalette === "export" ? "#e2e8f0" : "var(--border)";
   const cardBg = colorPalette === "export" ? "#ffffff" : "var(--card)";
@@ -77,7 +87,7 @@ export function DataChart({ results, chartSpec, renderTable, colorPalette = "the
 
   if (chartType === "bar") {
     return (
-      <div className="h-[320px] w-full">
+      <div className={cn(hWrap, "w-full")}>
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={chartData} margin={{ top: 8, right: 8, left: 8, bottom: 8 }}>
             <CartesianGrid strokeDasharray="3 3" stroke={gridStroke} />
@@ -111,7 +121,7 @@ export function DataChart({ results, chartSpec, renderTable, colorPalette = "the
   if (chartType === "line" || chartType === "area") {
     const ChartComponent = chartType === "area" ? AreaChart : LineChart;
     return (
-      <div className="h-[320px] w-full">
+      <div className={cn(hWrap, "w-full")}>
         <ResponsiveContainer width="100%" height="100%">
           <ChartComponent data={chartData} margin={{ top: 8, right: 8, left: 8, bottom: 8 }}>
             <defs>
@@ -176,7 +186,7 @@ export function DataChart({ results, chartSpec, renderTable, colorPalette = "the
     }
 
     return (
-      <div className="h-[320px] w-full">
+      <div className={cn(hWrap, "w-full")}>
         <ResponsiveContainer width="100%" height="100%">
           <PieChart>
             <Pie

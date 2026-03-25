@@ -75,6 +75,11 @@ class DataPilotState(TypedDict, total=False):
     missing_explanation: Optional[str]
     tables_used: list[str]  # From Discovery; informs SQL generation
     sql: Optional[str]  # From Optimizer when user approves execution
+    # Filled by optimizer_prepare; consumed by optimizer_gate (so resume does not re-run LLM/dry-run).
+    pending_execute_sql: Optional[str]
+    pending_execute_bytes: Optional[int]
+    pending_execute_cost: Optional[float]
+    pending_execute_dialect: Optional[str]
     bytes_scanned: Optional[int]  # BigQuery dry run estimate
     estimated_cost: Optional[float]  # BigQuery cost estimate (USD)
     raw_results: Optional[list[dict[str, Any]]]

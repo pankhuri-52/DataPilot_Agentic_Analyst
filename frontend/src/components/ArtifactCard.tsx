@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import html2canvas from "html2canvas";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Table,
@@ -11,8 +12,13 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { BarChart3, Table2, Code, CheckCircle2 } from "lucide-react";
+import { BarChart3, Table2, Code, CheckCircle2, FileDown, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import {
+  buildResultPdfBlob,
+  triggerPdfFileDownload,
+} from "@/lib/exportResultPdf";
+import { Button } from "@/components/ui/button";
 import { DataChart, type ChartSpec } from "./DataChart";
 
 interface ArtifactCardProps {
@@ -23,6 +29,11 @@ interface ArtifactCardProps {
   sql?: string;
   dataFeasibility?: string;
   validationOk?: boolean;
+  /** Original user question (for the PDF cover). */
+  userQuestion?: string;
+  answerSummary?: string;
+  followUpSuggestions?: string[];
+  missingExplanation?: string;
 }
 
 export function ArtifactCard({
@@ -33,7 +44,21 @@ export function ArtifactCard({
   sql,
   dataFeasibility,
   validationOk,
+  userQuestion,
+  answerSummary,
+  followUpSuggestions,
+  missingExplanation,
 }: ArtifactCardProps) {
+  const chartExportRef = useRef<HTMLDivElement>(null);
+  const [pdfBusy, setPdfBusy] = useState(false);
+  const [pdfManualUrl, setPdfManualUrl] = useState<{ url: string; name: string } | null>(null);
+  const [pdfError, setPdfError] = useState<string | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (pdfManualUrl) URL.revokeObjectURL(pdfManualUrl.url);
+    };
+  }, [pdfManualUrl]);
   const [activeTab, setActiveTab] = useState<"chart" | "table" | "sql">(
     chartSpec && chartSpec.chart_type !== "table" ? "chart" : "table"
   );
@@ -43,14 +68,123 @@ export function ArtifactCard({
     chartSpec.chart_type &&
     ["bar", "line", "pie", "area"].includes(chartSpec.chart_type.toLowerCase());
 
+  const handleExportPdf = async () => {
+    setPdfError(null);
+    if (pdfManualUrl) {
+      URL.revokeObjectURL(pdfManualUrl.url);
+      setPdfManualUrl(null);
+    }
+    setPdfBusy(true);
+    try {
+      let chartImageDataUrl: string | null = null;
+      if (hasChart && chartSpec && chartExportRef.current) {
+        try {
+          await new Promise<void>((resolve) =>
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+          );
+          await new Promise<void>((r) => setTimeout(r, 220));
+          const canvas = await html2canvas(chartExportRef.current, {
+            scale: 2.5,
+            backgroundColor: "#ffffff",
+            logging: false,
+            useCORS: true,
+            allowTaint: true,
+            foreignObjectRendering: false,
+          });
+          chartImageDataUrl = canvas.toDataURL("image/png");
+        } catch (chartErr) {
+          console.warn("Chart snapshot skipped for PDF", chartErr);
+        }
+      }
+      const xf = chartSpec?.x_field ? String(chartSpec.x_field) : "";
+      const yf = chartSpec?.y_field ? String(chartSpec.y_field) : "";
+      const chartCaption =
+        hasChart && chartSpec
+          ? [chartSpec.title, chartSpec.chart_type, xf && yf ? `${xf} vs ${yf}` : ""]
+              .filter(Boolean)
+              .join(" · ")
+          : undefined;
+
+      const { blob, filename } = await buildResultPdfBlob({
+        userQuestion: userQuestion ?? "",
+        reportTitle: title,
+        answerSummary: answerSummary ?? "",
+        explanation: explanation ?? "",
+        followUpSuggestions: followUpSuggestions ?? [],
+        missingExplanation,
+        sql,
+        results,
+        chartImageDataUrl,
+        chartCaption,
+      });
+      const manualUrl = URL.createObjectURL(blob);
+      setPdfManualUrl({ url: manualUrl, name: filename });
+      triggerPdfFileDownload(blob, filename);
+    } catch (err) {
+      console.error("PDF export failed", err);
+      setPdfError(err instanceof Error ? err.message : "Could not create PDF");
+    } finally {
+      setPdfBusy(false);
+    }
+  };
+
   return (
     <Card className="overflow-hidden border-border shadow-sm">
+      {hasChart && chartSpec && (
+        <div
+          ref={chartExportRef}
+          className="pointer-events-none fixed left-0 top-0 z-0 min-h-[440px] w-[900px] bg-white p-4 pb-2 text-slate-900 opacity-0 shadow-none"
+          aria-hidden
+        >
+          {chartSpec.title ? (
+            <p className="mb-2 text-center text-sm font-semibold text-slate-800">{chartSpec.title}</p>
+          ) : null}
+          <DataChart
+            results={results}
+            chartSpec={chartSpec}
+            colorPalette="export"
+            chartHeightClassName="h-[400px]"
+          />
+        </div>
+      )}
       <CardHeader className="space-y-1 pb-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <CardTitle className="font-display text-lg font-semibold">
             {title}
           </CardTitle>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="cursor-pointer gap-1.5"
+              disabled={pdfBusy}
+              onClick={() => void handleExportPdf()}
+            >
+              {pdfBusy ? (
+                <Loader2 className="size-3.5 animate-spin" aria-hidden />
+              ) : (
+                <FileDown className="size-3.5" aria-hidden />
+              )}
+              Download PDF
+            </Button>
+            {pdfError && (
+              <p className="w-full text-xs text-destructive sm:w-auto" role="alert">
+                {pdfError}
+              </p>
+            )}
+            {pdfManualUrl && (
+              <p className="w-full text-xs text-muted-foreground sm:max-w-[220px] sm:text-right">
+                No file saved?{" "}
+                <a
+                  href={pdfManualUrl.url}
+                  download={pdfManualUrl.name}
+                  className="font-medium text-primary underline underline-offset-2"
+                >
+                  Download PDF
+                </a>
+              </p>
+            )}
             {dataFeasibility && (
               <Badge
                 variant={

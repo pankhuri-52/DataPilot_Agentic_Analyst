@@ -1,6 +1,9 @@
 """
 Optimizer Agent – generates SQL per dialect, validates, estimates cost (BigQuery), and asks user to confirm before execution.
 Uses official BigQuery/Postgres SQL docs best practices. Calls interrupt() for execute confirmation.
+
+Split into prepare + gate nodes so LangGraph resume does not re-run the whole optimizer: after HITL approval,
+only optimizer_gate restarts (cheap); SQL generation and dry-run stay in optimizer_prepare (runs once).
 """
 import os
 import json
@@ -61,8 +64,8 @@ Rules:
 """
 
 
-def run_optimizer(state: dict) -> dict:
-    """Optimizer Agent: generate SQL, validate, estimate cost (BigQuery), interrupt for user approval."""
+def run_optimizer_prepare(state: dict) -> dict:
+    """Generate SQL, validate, dry-run estimate. Persists pending_* for optimizer_gate (no interrupt here)."""
     plan = state.get("plan")
     nearest_plan = state.get("nearest_plan")
     data_feasibility = state.get("data_feasibility", "none")
@@ -70,7 +73,7 @@ def run_optimizer(state: dict) -> dict:
 
     append_trace(
         trace,
-        TraceEntry(agent="optimizer", status="info", message="Generating SQL from analysis plan...").model_dump()
+        TraceEntry(agent="optimizer", status="info", message="Generating SQL from analysis plan...").model_dump(),
     )
 
     if data_feasibility == "none":
@@ -146,7 +149,11 @@ def run_optimizer(state: dict) -> dict:
         if FORBIDDEN_SQL_PATTERNS.search(sql):
             append_trace(
                 trace,
-                TraceEntry(agent="optimizer", status="error", message="Generated SQL contains forbidden operations").model_dump(),
+                TraceEntry(
+                    agent="optimizer",
+                    status="error",
+                    message="Generated SQL contains forbidden operations",
+                ).model_dump(),
             )
             return {"trace": trace}
 
@@ -175,41 +182,15 @@ def run_optimizer(state: dict) -> dict:
                     TraceEntry(agent="optimizer", status="info", message=f"Dry run skipped: {e}").model_dump(),
                 )
 
-        # Interrupt: ask user to approve execution
-        skip_hil = os.getenv("DATAPILOT_SKIP_INTERRUPTS", "").strip().lower() in ("1", "true", "yes")
-        if skip_hil:
-            approved = True
-        else:
-            interrupt_payload = {
-                "reason": "execute_query",
-                "sql": sql,
-                "bytes_scanned": bytes_scanned,
-                "estimated_cost": estimated_cost,
-                "dialect": dialect,
-            }
-            approved = interrupt(interrupt_payload)
-
-        if not approved:
-            append_trace(
-                trace,
-                TraceEntry(agent="optimizer", status="info", message="User declined to execute").model_dump(),
-            )
-            return {"trace": trace}
-
-        append_trace(
-            trace,
-            TraceEntry(agent="optimizer", status="success", message="User approved – proceeding to execution").model_dump(),
-        )
-
-        update = {"sql": sql, "trace": trace}
-        if bytes_scanned is not None:
-            update["bytes_scanned"] = bytes_scanned
-        if estimated_cost is not None:
-            update["estimated_cost"] = estimated_cost
-        return update
+        return {
+            "trace": trace,
+            "pending_execute_sql": sql,
+            "pending_execute_bytes": bytes_scanned,
+            "pending_execute_cost": estimated_cost,
+            "pending_execute_dialect": dialect,
+        }
 
     except Exception as e:
-        # Re-raise interrupt so LangGraph can handle it (don't show raw Interrupt object to user)
         err_type = type(e).__name__
         err_str = str(e)
         if "Interrupt" in err_type or "interrupt" in err_str.lower():
@@ -219,3 +200,64 @@ def run_optimizer(state: dict) -> dict:
             TraceEntry(agent="optimizer", status="error", message=str(e)).model_dump(),
         )
         return {"trace": trace}
+
+
+def _clear_pending_execute() -> dict:
+    return {
+        "pending_execute_sql": None,
+        "pending_execute_bytes": None,
+        "pending_execute_cost": None,
+        "pending_execute_dialect": None,
+    }
+
+
+def run_optimizer_gate(state: dict) -> dict:
+    """Human-in-the-loop: interrupt for execute approval. Runs alone on resume so LLM/dry-run are not repeated."""
+    trace = state.get("trace", [])
+    sql = state.get("pending_execute_sql")
+    if not sql:
+        return {}
+
+    bytes_scanned = state.get("pending_execute_bytes")
+    estimated_cost = state.get("pending_execute_cost")
+    dialect = (state.get("pending_execute_dialect") or "bigquery").strip() or "bigquery"
+
+    skip_hil = os.getenv("DATAPILOT_SKIP_INTERRUPTS", "").strip().lower() in ("1", "true", "yes")
+    if skip_hil:
+        approved = True
+    else:
+        interrupt_payload = {
+            "reason": "execute_query",
+            "sql": sql,
+            "bytes_scanned": bytes_scanned,
+            "estimated_cost": estimated_cost,
+            "dialect": dialect,
+        }
+        approved = interrupt(interrupt_payload)
+
+    if not approved:
+        append_trace(
+            trace,
+            TraceEntry(agent="optimizer", status="info", message="User declined to execute").model_dump(),
+        )
+        return {"trace": trace, **_clear_pending_execute()}
+
+    append_trace(
+        trace,
+        TraceEntry(
+            agent="optimizer",
+            status="success",
+            message="User approved – proceeding to execution",
+        ).model_dump(),
+    )
+
+    update: dict = {
+        "sql": sql,
+        "trace": trace,
+        **_clear_pending_execute(),
+    }
+    if bytes_scanned is not None:
+        update["bytes_scanned"] = bytes_scanned
+    if estimated_cost is not None:
+        update["estimated_cost"] = estimated_cost
+    return update

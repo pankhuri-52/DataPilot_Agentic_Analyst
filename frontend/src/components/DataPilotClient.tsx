@@ -4,7 +4,7 @@ import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { AlertCircle, Send, Loader2, Sparkles } from "lucide-react";
+import { AlertCircle, Send, Loader2, Sparkles, FileDown } from "lucide-react";
 import { PlanCard } from "./PlanCard";
 import { ArtifactCard } from "./ArtifactCard";
 import { ExecutionPlanPanel } from "./ExecutionPlanPanel";
@@ -19,6 +19,8 @@ import {
 } from "@/contexts/ChatContext";
 
 import { API_BASE, fetchWithRetry } from "@/lib/httpClient";
+import { buildResultPdfBlob, triggerPdfFileDownload } from "@/lib/exportResultPdf";
+import { getPdfAnalyticalQuestion } from "@/lib/pdfUserQuestion";
 import { formatExecutedAtLabel } from "@/lib/formatExecutedAt";
 
 interface TraceEntry {
@@ -124,6 +126,12 @@ export function DataPilotClient() {
   const [suggestedQuestions, setSuggestedQuestions] = useState<string[]>([]);
   const [suggestedSource, setSuggestedSource] = useState<string | null>(null);
   const [suggestedLoading, setSuggestedLoading] = useState(false);
+  const [pdfExportingForMessageId, setPdfExportingForMessageId] = useState<string | null>(null);
+  const [outcomePdfManual, setOutcomePdfManual] = useState<{
+    messageId: string;
+    url: string;
+    name: string;
+  } | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const queryInputRef = useRef<HTMLInputElement>(null);
   /** Prevents double-submit before React commits loading/currentConversationId (avoids duplicate conversations). */
@@ -138,6 +146,12 @@ export function DataPilotClient() {
     const id = window.setTimeout(() => scrollToBottom(), 100);
     return () => clearTimeout(id);
   }, [messages]);
+
+  useEffect(() => {
+    return () => {
+      if (outcomePdfManual) URL.revokeObjectURL(outcomePdfManual.url);
+    };
+  }, [outcomePdfManual]);
 
   useEffect(() => {
     if (!composerQuerySeed) return;
@@ -828,7 +842,7 @@ export function DataPilotClient() {
           </div>
         )}
 
-        {messages.map((message) => (
+        {messages.map((message, msgIndex) => (
           <div
             key={message.id}
             className={cn(
@@ -1130,10 +1144,82 @@ export function DataPilotClient() {
                             sql={res.sql}
                             dataFeasibility={res.data_feasibility}
                             validationOk={res.validation_ok}
+                            userQuestion={getPdfAnalyticalQuestion(messages, msgIndex)}
+                            answerSummary={summaryDupesExplanation ? "" : answerSummary}
+                            followUpSuggestions={followUps}
+                            missingExplanation={
+                              typeof res.missing_explanation === "string"
+                                ? res.missing_explanation
+                                : undefined
+                            }
                           />
                         )}
                         {showOutcomeCard && (
-                          <div className="rounded-lg border border-border bg-card p-4 space-y-2">
+                          <div className="rounded-lg border border-border bg-card p-4 space-y-3">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <p className="text-sm font-medium">Outcome</p>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="cursor-pointer gap-1.5"
+                                disabled={pdfExportingForMessageId === message.id}
+                                onClick={() => {
+                                  const priorQ = getPdfAnalyticalQuestion(messages, msgIndex);
+                                  setPdfExportingForMessageId(message.id);
+                                  void (async () => {
+                                    try {
+                                      const { blob, filename } = await buildResultPdfBlob({
+                                        userQuestion: priorQ,
+                                        reportTitle: res.chart_spec?.title || "Results",
+                                        answerSummary: summaryDupesExplanation ? "" : answerSummary,
+                                        explanation: explanationText,
+                                        followUpSuggestions: followUps,
+                                        missingExplanation:
+                                          typeof res.missing_explanation === "string"
+                                            ? res.missing_explanation
+                                            : undefined,
+                                        emptyResultReason: emptyReason,
+                                        sql: typeof res.sql === "string" ? res.sql : undefined,
+                                        results: [],
+                                      });
+                                      setOutcomePdfManual((prev) => {
+                                        if (prev) URL.revokeObjectURL(prev.url);
+                                        return {
+                                          messageId: message.id,
+                                          url: URL.createObjectURL(blob),
+                                          name: filename,
+                                        };
+                                      });
+                                      triggerPdfFileDownload(blob, filename);
+                                    } catch (e) {
+                                      console.error("Outcome PDF export failed", e);
+                                    } finally {
+                                      setPdfExportingForMessageId(null);
+                                    }
+                                  })();
+                                }}
+                              >
+                                {pdfExportingForMessageId === message.id ? (
+                                  <Loader2 className="size-3.5 animate-spin" aria-hidden />
+                                ) : (
+                                  <FileDown className="size-3.5" aria-hidden />
+                                )}
+                                Download PDF
+                              </Button>
+                            </div>
+                            {outcomePdfManual?.messageId === message.id && (
+                              <p className="text-xs text-muted-foreground">
+                                No file saved?{" "}
+                                <a
+                                  href={outcomePdfManual.url}
+                                  download={outcomePdfManual.name}
+                                  className="font-medium text-primary underline underline-offset-2"
+                                >
+                                  Download PDF
+                                </a>
+                              </p>
+                            )}
                             {res.chart_spec?.title && (
                               <p className="text-sm font-medium">{res.chart_spec.title}</p>
                             )}

@@ -13,7 +13,7 @@ from agents.state import DataPilotState
 from agents.query_kb import run_query_kb
 from agents.planner import run_planner
 from agents.discovery import run_discovery
-from agents.optimizer import run_optimizer
+from agents.optimizer import run_optimizer_gate, run_optimizer_prepare
 from agents.executor import run_executor
 from agents.validator import run_validator
 from agents.visualization import run_visualization
@@ -34,16 +34,16 @@ def route_after_planner(state: DataPilotState) -> Literal["discovery", "__end__"
     return "__end__"
 
 
-def route_after_discovery(state: DataPilotState) -> Literal["optimizer", "__end__"]:
-    """If feasibility is full or partial, go to optimizer; else end."""
+def route_after_discovery(state: DataPilotState) -> Literal["optimizer_prepare", "__end__"]:
+    """If feasibility is full or partial, go to optimizer prepare; else end."""
     feasibility = state.get("data_feasibility", "none")
     if feasibility in ("full", "partial"):
-        return "optimizer"
+        return "optimizer_prepare"
     return "__end__"
 
 
-def route_after_optimizer(state: DataPilotState) -> Literal["executor", "__end__"]:
-    """If optimizer produced sql (user approved), go to executor; else end."""
+def route_after_optimizer_gate(state: DataPilotState) -> Literal["executor", "__end__"]:
+    """If gate promoted pending SQL (user approved), go to executor; else end."""
     if state.get("sql"):
         return "executor"
     return "__end__"
@@ -56,7 +56,8 @@ def build_graph():
     graph.add_node("query_kb", run_query_kb)
     graph.add_node("planner", run_planner)
     graph.add_node("discovery", run_discovery)
-    graph.add_node("optimizer", run_optimizer)
+    graph.add_node("optimizer_prepare", run_optimizer_prepare)
+    graph.add_node("optimizer_gate", run_optimizer_gate)
     graph.add_node("executor", run_executor)
     graph.add_node("validator", run_validator)
     graph.add_node("visualization", run_visualization)
@@ -69,8 +70,17 @@ def build_graph():
         {"planner": "planner", "executor": "executor"},
     )
     graph.add_conditional_edges("planner", route_after_planner, {"discovery": "discovery", "__end__": END})
-    graph.add_conditional_edges("discovery", route_after_discovery, {"optimizer": "optimizer", "__end__": END})
-    graph.add_conditional_edges("optimizer", route_after_optimizer, {"executor": "executor", "__end__": END})
+    graph.add_conditional_edges(
+        "discovery",
+        route_after_discovery,
+        {"optimizer_prepare": "optimizer_prepare", "__end__": END},
+    )
+    graph.add_edge("optimizer_prepare", "optimizer_gate")
+    graph.add_conditional_edges(
+        "optimizer_gate",
+        route_after_optimizer_gate,
+        {"executor": "executor", "__end__": END},
+    )
     graph.add_edge("executor", "validator")
     graph.add_edge("validator", "visualization")
     graph.add_edge("visualization", END)
