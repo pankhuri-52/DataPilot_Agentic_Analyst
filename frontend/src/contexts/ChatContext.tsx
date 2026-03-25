@@ -79,6 +79,10 @@ interface ChatContextType {
   conversationsError: string | null;
   clearConversationsError: () => void;
   upsertConversation: (conv: Conversation) => void;
+  /** Sidebar / shell sets this; DataPilotClient applies to the query input and clears. */
+  composerQuerySeed: { id: number; text: string } | null;
+  requestComposerQuery: (text: string) => void;
+  clearComposerQuerySeed: () => void;
 }
 
 const ChatContext = createContext<ChatContextType | undefined>(undefined);
@@ -89,6 +93,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const [currentConversationId, setCurrentConversationIdState] = useState<string | null>(null);
   const [messagesByConv, setMessagesByConv] = useState<Record<string, Message[]>>({});
   const [conversationsError, setConversationsError] = useState<string | null>(null);
+  const [composerQuerySeed, setComposerQuerySeed] = useState<{
+    id: number;
+    text: string;
+  } | null>(null);
 
   const messagesByConvRef = useRef(messagesByConv);
   messagesByConvRef.current = messagesByConv;
@@ -155,6 +163,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       setCurrentConversationIdState(null);
       setMessagesByConv({});
       setConversationsError(null);
+      setComposerQuerySeed(null);
     }
   }, [user, fetchConversations]);
 
@@ -208,6 +217,17 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     setMessagesByConv((prev) => ({ ...prev, [GUEST_MESSAGES_KEY]: [] }));
   }, []);
 
+  const requestComposerQuery = useCallback((text: string) => {
+    setComposerQuerySeed((prev) => ({
+      id: (prev?.id ?? 0) + 1,
+      text,
+    }));
+  }, []);
+
+  const clearComposerQuerySeed = useCallback(() => {
+    setComposerQuerySeed(null);
+  }, []);
+
   const setCurrentConversationId = useCallback((id: string | null) => {
     setCurrentConversationIdState(id);
   }, []);
@@ -228,6 +248,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         conversationsError,
         clearConversationsError,
         upsertConversation,
+        composerQuerySeed,
+        requestComposerQuery,
+        clearComposerQuerySeed,
       }}
     >
       {children}

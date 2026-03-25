@@ -1,13 +1,21 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, type ComponentType } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Plus, Database, Server, Cloud, Loader2 } from "lucide-react";
+import { Plus, Database, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { API_BASE, fetchWithRetry } from "@/lib/httpClient";
+import {
+  BigQueryVendorIcon,
+  PostgresVendorIcon,
+  SnowflakeVendorIcon,
+  MySQLVendorIcon,
+  SqlServerVendorIcon,
+  RedshiftVendorIcon,
+} from "@/components/DataSourceVendorIcons";
 
 interface ApiSource {
   id: string;
@@ -23,11 +31,95 @@ interface StatusResponse {
   hint?: string;
 }
 
-const typeLabels: Record<string, string> = {
-  bigquery: "BigQuery",
-  postgres: "PostgreSQL",
-  postgresql: "PostgreSQL",
+type CatalogEntry = {
+  id: string;
+  name: string;
+  Icon: ComponentType<{ className?: string }>;
+  /** API `source.type` values that map to this connector */
+  matchTypes: string[];
+  /** Can be wired today via backend `.env` */
+  envDriven: boolean;
 };
+
+const CONNECTOR_CATALOG: CatalogEntry[] = [
+  {
+    id: "bigquery",
+    name: "Google BigQuery",
+    Icon: BigQueryVendorIcon,
+    matchTypes: ["bigquery"],
+    envDriven: true,
+  },
+  {
+    id: "postgres",
+    name: "PostgreSQL",
+    Icon: PostgresVendorIcon,
+    matchTypes: ["postgres", "postgresql"],
+    envDriven: true,
+  },
+  {
+    id: "snowflake",
+    name: "Snowflake",
+    Icon: SnowflakeVendorIcon,
+    matchTypes: [],
+    envDriven: false,
+  },
+  {
+    id: "mysql",
+    name: "MySQL",
+    Icon: MySQLVendorIcon,
+    matchTypes: [],
+    envDriven: false,
+  },
+  {
+    id: "mssql",
+    name: "Microsoft SQL Server",
+    Icon: SqlServerVendorIcon,
+    matchTypes: [],
+    envDriven: false,
+  },
+  {
+    id: "redshift",
+    name: "Amazon Redshift",
+    Icon: RedshiftVendorIcon,
+    matchTypes: [],
+    envDriven: false,
+  },
+];
+
+type ConnectorUiState = "live" | "error" | "available" | "soon";
+
+function connectorUiState(entry: CatalogEntry, sources: ApiSource[]): ConnectorUiState {
+  const tnorm = (t: string) => t.toLowerCase();
+  const match = sources.find((s) => entry.matchTypes.includes(tnorm(s.type || "")));
+  if (match) return match.healthy ? "live" : "error";
+  if (entry.envDriven) return "available";
+  return "soon";
+}
+
+function badgeForState(state: ConnectorUiState): { label: string; className: string } {
+  switch (state) {
+    case "live":
+      return {
+        label: "Live",
+        className: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400",
+      };
+    case "error":
+      return {
+        label: "Error",
+        className: "bg-destructive/10 text-destructive",
+      };
+    case "available":
+      return {
+        label: "Not connected",
+        className: "bg-muted text-muted-foreground",
+      };
+    default:
+      return {
+        label: "Coming soon",
+        className: "border border-dashed border-border bg-background text-muted-foreground",
+      };
+  }
+}
 
 export default function SourcesPage() {
   const [status, setStatus] = useState<StatusResponse | null>(null);
@@ -71,8 +163,8 @@ export default function SourcesPage() {
             Data Sources
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Your analytics warehouse is configured via environment variables. This page shows live
-            connection status from the API.
+            Supported platforms you can connect over time. Today the warehouse is chosen via
+            environment variables; the badge reflects live status from the API.
           </p>
         </div>
       </header>
@@ -103,57 +195,80 @@ export default function SourcesPage() {
             </Alert>
           )}
 
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-medium text-muted-foreground">
-              {sources.length} active source{sources.length !== 1 ? "s" : ""}
-            </h2>
-            <Button onClick={() => setShowAddForm(true)} className="cursor-pointer" size="sm">
-              <Plus className="size-4 mr-2" aria-hidden />
-              Add source
-            </Button>
-          </div>
-
-          {sources.length > 0 && (
-            <div className="space-y-4">
-              {sources.map((source) => {
-                const t = (source.type || "").toLowerCase();
-                const Icon = t === "bigquery" ? Cloud : Server;
-                const label = typeLabels[t] ?? source.type;
-                const ok = source.healthy;
+          <section aria-labelledby="connectors-heading">
+            <div className="flex items-center justify-between gap-4 mb-4">
+              <h2 id="connectors-heading" className="text-sm font-medium text-foreground">
+                Connectors
+              </h2>
+              <Button onClick={() => setShowAddForm(true)} className="cursor-pointer" size="sm">
+                <Plus className="size-4 mr-2" aria-hidden />
+                Add source
+              </Button>
+            </div>
+            <ul className="grid gap-3 sm:grid-cols-2">
+              {CONNECTOR_CATALOG.map((entry) => {
+                const VendorIcon = entry.Icon;
+                const state = connectorUiState(entry, sources);
+                const badge = badgeForState(state);
+                const match = sources.find((s) =>
+                  entry.matchTypes.includes((s.type || "").toLowerCase())
+                );
+                const dimmed = state === "soon";
                 return (
-                  <Card
-                    key={source.id}
-                    className="transition-colors duration-200 hover:border-primary/20"
-                  >
-                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                      <div className="flex items-center gap-3 min-w-0">
-                        <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-muted">
-                          <Icon className="size-5 text-muted-foreground" aria-hidden />
+                  <li key={entry.id}>
+                    <Card
+                      className={cn(
+                        "h-full transition-colors duration-200",
+                        state === "live" && "border-emerald-500/30 bg-emerald-500/[0.03]",
+                        state === "error" && "border-destructive/40",
+                        dimmed && "opacity-70"
+                      )}
+                    >
+                      <CardHeader className="flex flex-row items-start justify-between gap-3 space-y-0 pb-2">
+                        <div className="flex items-start gap-3 min-w-0">
+                          <div
+                            className={cn(
+                              "flex size-11 shrink-0 items-center justify-center rounded-lg border border-border bg-muted/80",
+                              state === "live" && "border-emerald-500/25 bg-background"
+                            )}
+                            aria-hidden
+                          >
+                            <VendorIcon className={cn(dimmed && "grayscale-[0.35] opacity-80")} />
+                          </div>
+                          <div className="min-w-0 pt-0.5">
+                            <CardTitle className="text-base font-medium leading-tight">
+                              {entry.name}
+                            </CardTitle>
+                            <CardDescription className="mt-1">
+                              {state === "live" && match?.label ? (
+                                <span className="text-foreground/80">{match.label}</span>
+                              ) : state === "error" && match?.detail ? (
+                                <span className="text-destructive text-xs break-words">
+                                  {match.detail}
+                                </span>
+                              ) : state === "available" ? (
+                                <span>Configure in server environment to activate.</span>
+                              ) : (
+                                <span>OAuth and multi-source UI are not available yet.</span>
+                              )}
+                            </CardDescription>
+                          </div>
                         </div>
-                        <div className="min-w-0">
-                          <CardTitle className="text-base font-medium truncate">
-                            {source.label || label}
-                          </CardTitle>
-                          <CardDescription>{label}</CardDescription>
-                          {source.detail && !ok && (
-                            <p className="mt-1 text-xs text-destructive break-words">{source.detail}</p>
+                        <span
+                          className={cn(
+                            "inline-flex shrink-0 items-center rounded-full px-2.5 py-0.5 text-xs font-medium",
+                            badge.className
                           )}
-                        </div>
-                      </div>
-                      <span
-                        className={cn(
-                          "inline-flex shrink-0 items-center rounded-full px-2.5 py-0.5 text-xs font-medium",
-                          ok ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400" : "bg-destructive/10 text-destructive"
-                        )}
-                      >
-                        {ok ? "Reachable" : "Error"}
-                      </span>
-                    </CardHeader>
-                  </Card>
+                        >
+                          {badge.label}
+                        </span>
+                      </CardHeader>
+                    </Card>
+                  </li>
                 );
               })}
-            </div>
-          )}
+            </ul>
+          </section>
 
           {showAddForm && (
             <Card className="animate-in fade-in slide-up duration-200">

@@ -8,6 +8,7 @@ import {
   MessageSquarePlus,
   MessageSquare,
   Database,
+  TrendingUp,
   LogIn,
   UserPlus,
   LogOut,
@@ -19,6 +20,7 @@ import {
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useChat } from "@/contexts/ChatContext";
+import { API_BASE, fetchWithRetry } from "@/lib/httpClient";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
@@ -74,7 +76,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
-  const { user, loading, signOut } = useAuth();
+  const { user, loading, signOut, getAccessToken } = useAuth();
   const {
     startNewChat,
     conversations,
@@ -82,7 +84,57 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     loadConversation,
     conversationsError,
     clearConversationsError,
+    requestComposerQuery,
   } = useChat();
+
+  const [mostAskedQuestions, setMostAskedQuestions] = useState<
+    { question: string; ask_count: number }[]
+  >([]);
+  const [mostAskedLoading, setMostAskedLoading] = useState(false);
+
+  useEffect(() => {
+    if (!user) {
+      setMostAskedQuestions([]);
+      return;
+    }
+    const token = getAccessToken();
+    if (!token) return;
+    let cancelled = false;
+    setMostAskedLoading(true);
+    fetchWithRetry(
+      `${API_BASE}/conversations/frequent-questions?limit=3`,
+      { headers: { Authorization: `Bearer ${token}` } },
+      { logLabel: "GET /conversations/frequent-questions" }
+    )
+      .then(async (res) => {
+        if (cancelled || !res.ok) return;
+        const data = (await res.json()) as {
+          questions?: { question?: string; ask_count?: number }[];
+        };
+        const raw = data.questions ?? [];
+        const next = raw
+          .map((row) => ({
+            question: (row.question ?? "").trim(),
+            ask_count: Number(row.ask_count) || 0,
+          }))
+          .filter((row) => row.question.length > 0);
+        setMostAskedQuestions(next);
+      })
+      .catch(() => {
+        if (!cancelled) setMostAskedQuestions([]);
+      })
+      .finally(() => {
+        if (!cancelled) setMostAskedLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [user, getAccessToken]);
+
+  const applyMostAskedQuestion = (question: string) => {
+    if (pathname !== "/") router.push("/");
+    requestComposerQuery(question);
+  };
 
   const handleNewChat = () => {
     startNewChat();
@@ -237,7 +289,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             </div>
           )}
           {user && sidebarCollapsed && (
-            <div className="mt-2 flex flex-col items-center border-t border-sidebar-border pt-2">
+            <div className="mt-2 flex flex-col items-center gap-2 border-t border-sidebar-border pt-2">
               <Link
                 href="/chats"
                 title="All chats"
@@ -250,6 +302,55 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               >
                 <MessageSquare className="size-5 shrink-0" aria-hidden />
               </Link>
+              <button
+                type="button"
+                title="Most Asked — expand sidebar to pick a question"
+                onClick={() => {
+                  if (sidebarCollapsed) toggleSidebar();
+                }}
+                className={cn(
+                  "flex size-10 cursor-pointer items-center justify-center rounded-lg transition-colors",
+                  "text-muted-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
+                )}
+                aria-label="Most Asked; expand sidebar"
+              >
+                <TrendingUp className="size-5 shrink-0" aria-hidden />
+              </button>
+            </div>
+          )}
+          {user && !sidebarCollapsed && (
+            <div className="mt-2 space-y-1 border-t border-sidebar-border pt-3">
+              <div
+                className={cn(
+                  "flex min-h-[44px] items-center gap-3 rounded-lg py-2.5 text-sm font-medium text-muted-foreground",
+                  "px-3"
+                )}
+              >
+                <TrendingUp className="size-5 shrink-0 text-sidebar-foreground/90" aria-hidden />
+                <span className="text-sidebar-foreground">Most Asked</span>
+              </div>
+              {mostAskedLoading && (
+                <p className="px-3 pb-1 text-[11px] text-muted-foreground">Loading…</p>
+              )}
+              {!mostAskedLoading && mostAskedQuestions.length === 0 && (
+                <p className="px-3 pb-1 text-[11px] text-muted-foreground/80">No questions yet</p>
+              )}
+              {!mostAskedLoading &&
+                mostAskedQuestions.length > 0 &&
+                mostAskedQuestions.map((item) => (
+                  <button
+                    key={item.question}
+                    type="button"
+                    onClick={() => applyMostAskedQuestion(item.question)}
+                    className={cn(
+                      "flex w-full cursor-pointer rounded-md px-2.5 py-2 text-left text-xs transition-colors",
+                      "text-muted-foreground hover:bg-sidebar-accent/40 hover:text-sidebar-foreground"
+                    )}
+                    title={item.question}
+                  >
+                    <span className="line-clamp-3">{item.question}</span>
+                  </button>
+                ))}
             </div>
           )}
           <Link
