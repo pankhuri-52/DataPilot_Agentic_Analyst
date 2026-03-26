@@ -13,6 +13,8 @@ from core.retry import retry_sync
 
 logger = logging.getLogger("datapilot.embeddings")
 
+_GEMINI_EMBED_MAX_ATTEMPTS = max(1, int(os.getenv("GEMINI_EMBED_MAX_ATTEMPTS", "2")))
+
 _GEMINI_EMBED_URL = (
     "https://generativelanguage.googleapis.com/v1beta/models/{model}:embedContent"
 )
@@ -82,7 +84,7 @@ def embed_text(text: str, *, task_type: str = "RETRIEVAL_QUERY") -> list[float]:
             )
         return [float(x) for x in emb]
 
-    return retry_sync("gemini.embed", _call)
+    return retry_sync("gemini.embed", _call, max_attempts=_GEMINI_EMBED_MAX_ATTEMPTS)
 
 
 def embed_text_with_retry(text: str, *, task_type: str = "RETRIEVAL_QUERY") -> list[float]:

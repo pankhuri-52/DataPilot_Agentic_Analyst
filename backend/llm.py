@@ -6,6 +6,9 @@ import os
 
 from core.retry import retry_sync
 
+# Few retries for real network blips only; quota errors do not retry (see core.retry).
+_GEMINI_INVOKE_MAX_ATTEMPTS = max(1, int(os.getenv("GEMINI_INVOKE_MAX_ATTEMPTS", "2")))
+
 
 def get_gemini():
     """Return a Gemini chat model. Requires GOOGLE_API_KEY in .env."""
@@ -30,4 +33,4 @@ def invoke_with_retry(llm, /, *args, **kwargs):
     def _call():
         return llm.invoke(*args, **kwargs)
 
-    return retry_sync("gemini.invoke", _call)
+    return retry_sync("gemini.invoke", _call, max_attempts=_GEMINI_INVOKE_MAX_ATTEMPTS)

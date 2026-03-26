@@ -17,6 +17,28 @@ _BASE_DELAY = float(os.getenv("DATAPILOT_RETRY_BASE_DELAY_SEC", "0.5"))
 _MAX_DELAY = float(os.getenv("DATAPILOT_RETRY_MAX_DELAY_SEC", "30"))
 
 
+def _is_quota_or_usage_exhausted(exc: BaseException) -> bool:
+    """
+    Gemini / Google APIs return RESOURCE_EXHAUSTED or explicit quota messages for
+    daily limits and similar. Retrying these in a loop wastes time and confuses users.
+    """
+    msg = f"{exc!s}\n{type(exc).__name__}\n{exc!r}".lower()
+    if "resource_exhausted" in msg or "resource exhausted" in msg:
+        return True
+    if "exceeded your current quota" in msg or "quota exceeded" in msg:
+        return True
+    if "generate_requests_per_day" in msg or "requests per day" in msg:
+        return True
+    if "billing" in msg and ("enable" in msg or "disabled" in msg or "not enabled" in msg):
+        return True
+    # urllib / httpx bodies often embed JSON with error.reason
+    if "generativelanguage" in msg and "quota" in msg and (
+        "exhaust" in msg or "limit" in msg or "429" in msg
+    ):
+        return True
+    return False
+
+
 def _is_transient_error(exc: BaseException) -> bool:
     if isinstance(exc, (ConnectionError, TimeoutError, BrokenPipeError)):
         return True
@@ -43,7 +65,13 @@ def _is_transient_error(exc: BaseException) -> bool:
         return True
     if "connection refused" in msg:
         return True
-    if "resource exhausted" in msg or "rate limit" in msg or "429" in msg:
+    # Do not treat quota exhaustion as transient (handled above).
+    if _is_quota_or_usage_exhausted(exc):
+        return False
+    if "rate limit" in msg:
+        return True
+    # Bare 429 can be quota or short-lived RPM; quota cases are filtered above.
+    if "429" in msg:
         return True
     name = type(exc).__name__
     if name in ("ConnectError", "ReadTimeout", "WriteTimeout", "RemoteProtocolError", "NetworkError"):
@@ -70,6 +98,9 @@ def retry_sync(
             return fn()
         except BaseException as e:
             last_exc = e
+            if _is_quota_or_usage_exhausted(e):
+                logger.warning("%s: quota / usage limit — not retrying: %s", operation, e)
+                raise
             if not _is_transient_error(e):
                 raise
             if attempt >= max_attempts:
