@@ -17,30 +17,30 @@ import {
   ChevronRight,
   ChevronDown,
   AlertCircle,
+  Pin,
+  PinOff,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useChat } from "@/contexts/ChatContext";
-import { API_BASE, fetchWithRetry } from "@/lib/httpClient";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
 const SIDEBAR_CHATS_MAX = 12;
 const SIDEBAR_STORAGE_KEY = "datapilot_sidebar_collapsed";
 const CHATS_SECTION_STORAGE_KEY = "datapilot_sidebar_chats_expanded";
+const CHATS_PIN_STORAGE_KEY = "datapilot_sidebar_chats_pinned";
 const SIDEBAR_WIDTH_STORAGE_KEY = "datapilot_sidebar_width_px";
 const SIDEBAR_WIDTH_DEFAULT = 224; /* 14rem */
 const SIDEBAR_WIDTH_MIN = 192; /* 12rem */
 const SIDEBAR_WIDTH_MAX = 384; /* 24rem */
 const SIDEBAR_NAV_ITEM_BASE =
-  "flex w-full min-h-[44px] items-center gap-3 rounded-xl border border-transparent text-sm font-medium transition-all duration-200";
+  "flex w-full min-h-[36px] items-center gap-3 rounded-lg px-2.5 text-[13px] font-medium transition-colors duration-150";
 const SIDEBAR_NAV_ITEM_ACTIVE =
-  "border-sidebar-border/80 bg-sidebar-accent text-sidebar-foreground shadow-sm";
+  "bg-sidebar-accent text-sidebar-accent-foreground";
 const SIDEBAR_NAV_ITEM_IDLE =
-  "text-muted-foreground hover:border-sidebar-border/70 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground";
+  "text-muted-foreground hover:bg-sidebar-accent/70 hover:text-sidebar-foreground";
 const SIDEBAR_SECTION_LABEL =
-  "px-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground/80";
-const SIDEBAR_SECTION_CARD =
-  "rounded-2xl border border-sidebar-border/70 bg-sidebar-accent/25 p-2 shadow-sm shadow-sidebar-primary/5";
+  "px-2.5 pb-1 pt-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/75";
 
 function getUserDisplayName(name?: string, email?: string) {
   const trimmedName = name?.trim();
@@ -66,6 +66,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [chatsExpanded, setChatsExpanded] = useState(false);
+  const [chatsPinned, setChatsPinned] = useState(false);
   const [sidebarWidthPx, setSidebarWidthPx] = useState(SIDEBAR_WIDTH_DEFAULT);
   const [isResizing, setIsResizing] = useState(false);
   const resizeDragRef = useRef<{ startX: number; startW: number } | null>(null);
@@ -107,6 +108,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  useEffect(() => {
+    try {
+      const v = localStorage.getItem(CHATS_PIN_STORAGE_KEY);
+      if (v === "1") setChatsPinned(true);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
   const toggleSidebar = useCallback(() => {
     setSidebarCollapsed((c) => {
       const next = !c;
@@ -131,7 +141,19 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
-  const { user, loading, signOut, getAccessToken } = useAuth();
+  const toggleChatsPinned = useCallback(() => {
+    setChatsPinned((p) => {
+      const next = !p;
+      try {
+        localStorage.setItem(CHATS_PIN_STORAGE_KEY, next ? "1" : "0");
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  }, []);
+
+  const { user, loading, signOut } = useAuth();
   const {
     startNewChat,
     conversations,
@@ -139,57 +161,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     loadConversation,
     conversationsError,
     clearConversationsError,
-    requestComposerQuery,
   } = useChat();
-
-  const [mostAskedQuestions, setMostAskedQuestions] = useState<
-    { question: string; ask_count: number }[]
-  >([]);
-  const [mostAskedLoading, setMostAskedLoading] = useState(false);
-
-  useEffect(() => {
-    if (!user) {
-      setMostAskedQuestions([]);
-      return;
-    }
-    const token = getAccessToken();
-    if (!token) return;
-    let cancelled = false;
-    setMostAskedLoading(true);
-    fetchWithRetry(
-      `${API_BASE}/conversations/frequent-questions?limit=3`,
-      { headers: { Authorization: `Bearer ${token}` } },
-      { logLabel: "GET /conversations/frequent-questions" }
-    )
-      .then(async (res) => {
-        if (cancelled || !res.ok) return;
-        const data = (await res.json()) as {
-          questions?: { question?: string; ask_count?: number }[];
-        };
-        const raw = data.questions ?? [];
-        const next = raw
-          .map((row) => ({
-            question: (row.question ?? "").trim(),
-            ask_count: Number(row.ask_count) || 0,
-          }))
-          .filter((row) => row.question.length > 0);
-        setMostAskedQuestions(next);
-      })
-      .catch(() => {
-        if (!cancelled) setMostAskedQuestions([]);
-      })
-      .finally(() => {
-        if (!cancelled) setMostAskedLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [user, getAccessToken]);
-
-  const applyMostAskedQuestion = (question: string) => {
-    if (pathname !== "/") router.push("/");
-    requestComposerQuery(question);
-  };
 
   const userDisplayName = getUserDisplayName(user?.name, user?.email);
   const userInitials = getUserInitials(user?.name, user?.email);
@@ -263,26 +235,26 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     >
       <aside
         className={cn(
-          "fixed left-0 top-0 z-30 flex h-full w-[var(--sidebar-width)] flex-col overflow-hidden border-r border-sidebar-border bg-sidebar/95 backdrop-blur supports-[backdrop-filter]:bg-sidebar/80",
+          "fixed left-0 top-0 z-30 flex h-screen w-[var(--sidebar-width)] flex-col overflow-hidden border-r border-sidebar-border bg-sidebar/95 backdrop-blur supports-[backdrop-filter]:bg-sidebar/80",
           !isResizing && "transition-[width] duration-200 ease-out"
         )}
       >
         <div
           className={cn(
-            "flex h-16 shrink-0 items-center border-b border-sidebar-border",
+            "flex min-h-16 shrink-0 items-center border-b border-primary/35 bg-primary/30 px-0 py-2 backdrop-blur-sm supports-[backdrop-filter]:bg-primary/28 dark:border-primary/40 dark:bg-primary/35 dark:supports-[backdrop-filter]:bg-primary/32",
             sidebarCollapsed ? "justify-center px-2" : "gap-3 px-3.5"
           )}
         >
           {!sidebarCollapsed && (
             <>
-              <div className="flex size-10 shrink-0 items-center justify-center rounded-2xl border border-sidebar-border/80 bg-sidebar-primary/15 text-sm font-semibold tracking-wide text-sidebar-foreground">
+              <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-sidebar-primary/12 text-[12px] font-semibold tracking-wide text-sidebar-primary">
                 DP
               </div>
-              <div className="min-w-0 flex-1">
-                <p className="truncate font-display text-base font-semibold tracking-tight text-sidebar-foreground">
+              <div className="flex min-h-0 min-w-0 flex-1 flex-col justify-center gap-1">
+                <p className="truncate font-display text-sm font-semibold tracking-tight text-sidebar-foreground">
                   DataPilot
                 </p>
-                <p className="truncate text-[11px] text-muted-foreground">
+                <p className="truncate text-[12px] leading-snug text-foreground/80">
                   Analytics workspace
                 </p>
               </div>
@@ -293,7 +265,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             variant="ghost"
             size="icon"
             onClick={toggleSidebar}
-            className="size-9 shrink-0 cursor-pointer rounded-xl text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
+            className="size-9 shrink-0 cursor-pointer rounded-lg text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
             aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
           >
             {sidebarCollapsed ? (
@@ -304,230 +276,265 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </Button>
         </div>
         <nav className="flex min-h-0 flex-1 flex-col px-2 py-3">
-          <div className="flex-1 space-y-4 overflow-y-auto pr-1" data-scrollbar>
-            {!sidebarCollapsed && (
-              <div className={cn(SIDEBAR_SECTION_CARD, "space-y-2.5")}>
-                <p className={SIDEBAR_SECTION_LABEL}>Workspace</p>
-                <button
-                  type="button"
-                  onClick={handleNewChat}
-                  title="New chat"
-                  className={cn(
-                    SIDEBAR_NAV_ITEM_BASE,
-                    "cursor-pointer justify-start px-3.5",
-                    pathname === "/" ? SIDEBAR_NAV_ITEM_ACTIVE : SIDEBAR_NAV_ITEM_IDLE
-                  )}
-                >
-                  <MessageSquarePlus className="size-5 shrink-0" aria-hidden />
-                  <span className="truncate">New chat</span>
-                </button>
-                <Link
-                  href="/sources"
-                  title="Data Sources"
-                  className={cn(
-                    SIDEBAR_NAV_ITEM_BASE,
-                    "justify-start px-3.5",
-                    pathname === "/sources" ? SIDEBAR_NAV_ITEM_ACTIVE : SIDEBAR_NAV_ITEM_IDLE
-                  )}
-                >
-                  <Database className="size-5 shrink-0" aria-hidden />
-                  <span className="truncate">Data Sources</span>
-                </Link>
-              </div>
-            )}
-
-            {sidebarCollapsed && (
-              <div className={cn(SIDEBAR_SECTION_CARD, "space-y-2 p-1.5")}>
-                <button
-                  type="button"
-                  onClick={handleNewChat}
-                  title="New chat"
-                  className={cn(
-                    SIDEBAR_NAV_ITEM_BASE,
-                    "cursor-pointer justify-center px-0",
-                    pathname === "/" ? SIDEBAR_NAV_ITEM_ACTIVE : SIDEBAR_NAV_ITEM_IDLE
-                  )}
-                >
-                  <MessageSquarePlus className="size-5 shrink-0" aria-hidden />
-                </button>
-                <Link
-                  href="/sources"
-                  title="Data Sources"
-                  className={cn(
-                    SIDEBAR_NAV_ITEM_BASE,
-                    "justify-center px-0",
-                    pathname === "/sources" ? SIDEBAR_NAV_ITEM_ACTIVE : SIDEBAR_NAV_ITEM_IDLE
-                  )}
-                >
-                  <Database className="size-5 shrink-0" aria-hidden />
-                </Link>
-              </div>
-            )}
-
-            {user && conversationsError && !sidebarCollapsed && (
-              <Alert variant="destructive" className="px-3 py-2 text-xs">
-                <AlertTitle className="text-xs leading-tight">Chat sync</AlertTitle>
-                <AlertDescription className="break-words text-[11px] leading-snug">
-                  {conversationsError}
-                </AlertDescription>
-                <button
-                  type="button"
-                  onClick={() => clearConversationsError()}
-                  className="mt-1 flex items-center gap-1 text-[11px] underline opacity-90 hover:opacity-100"
-                >
-                  <X className="size-3" aria-hidden />
-                  Dismiss
-                </button>
-              </Alert>
-            )}
-            {user && conversationsError && sidebarCollapsed && (
-              <button
-                type="button"
-                title={`Chat sync: ${conversationsError}`}
-                onClick={() => clearConversationsError()}
-                className="mx-auto flex size-10 shrink-0 cursor-pointer items-center justify-center rounded-xl text-destructive transition-colors hover:bg-destructive/10"
-                aria-label="Chat sync error; dismiss"
-              >
-                <AlertCircle className="size-5" aria-hidden />
-              </button>
-            )}
-
-            {user && !sidebarCollapsed && (
-              <div className={cn(SIDEBAR_SECTION_CARD, "space-y-2.5")}>
-                <div className="flex items-center justify-between gap-2 px-2">
-                  <p className={SIDEBAR_SECTION_LABEL}>Recent chats</p>
-                  {conversations.length > 0 && (
-                    <span className="inline-flex items-center rounded-full border border-sidebar-border/70 px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
-                      {Math.min(conversations.length, SIDEBAR_CHATS_MAX)}
-                    </span>
-                  )}
-                </div>
-                {conversations.length === 0 ? (
-                  <p className="px-3 py-2 text-xs text-muted-foreground/80">No chats yet</p>
-                ) : (
-                  <>
-                    <button
-                      type="button"
-                      onClick={toggleChatsSection}
-                      aria-expanded={chatsExpanded}
-                      aria-controls="sidebar-chats-list"
-                      className={cn(
-                        SIDEBAR_NAV_ITEM_BASE,
-                        SIDEBAR_NAV_ITEM_IDLE,
-                        "cursor-pointer justify-between px-3.5 text-left"
-                      )}
-                    >
-                      <span className="flex min-w-0 items-center gap-3">
-                        <MessageSquare className="size-4 shrink-0" aria-hidden />
-                        <span className="truncate">All chats</span>
-                      </span>
-                      <ChevronDown
-                        className={cn(
-                          "size-4 shrink-0 transition-transform duration-200",
-                          !chatsExpanded && "-rotate-90"
-                        )}
-                        aria-hidden
-                      />
-                    </button>
-                    {chatsExpanded && (
-                      <div
-                        id="sidebar-chats-list"
-                        className="min-h-[2rem] max-h-56 space-y-1 overflow-y-auto pr-1"
-                        data-scrollbar
-                      >
-                        {conversations.slice(0, SIDEBAR_CHATS_MAX).map((c) => {
-                          const selected = c.id === currentConversationId && pathname === "/";
-                          return (
-                            <button
-                              key={c.id}
-                              type="button"
-                              onClick={() => {
-                                if (c.id === currentConversationId && pathname === "/") return;
-                                loadConversation(c.id);
-                                if (pathname !== "/") router.push("/");
-                              }}
-                              className={cn(
-                                "flex w-full cursor-pointer items-center rounded-xl border border-transparent px-3 py-2.5 text-left text-xs transition-all duration-200",
-                                selected
-                                  ? "border-sidebar-border/80 bg-sidebar-accent text-sidebar-foreground shadow-sm"
-                                  : "text-muted-foreground hover:border-sidebar-border/70 hover:bg-sidebar-accent/55 hover:text-sidebar-foreground"
-                              )}
-                              title={c.title || "Untitled"}
-                            >
-                              <span className="truncate">{c.title || "Untitled"}</span>
-                            </button>
-                          );
-                        })}
-                      </div>
+          <div className="flex min-h-0 flex-1 flex-col gap-3">
+            <div className="shrink-0 space-y-0.5">
+              {!sidebarCollapsed && (
+                <div className="space-y-0.5">
+                  <p className={SIDEBAR_SECTION_LABEL}>Workspace</p>
+                  <button
+                    type="button"
+                    onClick={handleNewChat}
+                    title="New chat"
+                    className={cn(
+                      SIDEBAR_NAV_ITEM_BASE,
+                      "cursor-pointer justify-start",
+                      pathname === "/" ? SIDEBAR_NAV_ITEM_ACTIVE : SIDEBAR_NAV_ITEM_IDLE
                     )}
-                  </>
-                )}
-              </div>
-            )}
+                  >
+                    <MessageSquarePlus className="size-[1.125rem] shrink-0" aria-hidden />
+                    <span className="truncate">New chat</span>
+                  </button>
+                  <Link
+                    href="/sources"
+                    title="Data Sources"
+                    className={cn(
+                      SIDEBAR_NAV_ITEM_BASE,
+                      "justify-start",
+                      pathname === "/sources" ? SIDEBAR_NAV_ITEM_ACTIVE : SIDEBAR_NAV_ITEM_IDLE
+                    )}
+                  >
+                    <Database className="size-[1.125rem] shrink-0" aria-hidden />
+                    <span className="truncate">Data Sources</span>
+                  </Link>
+                  <Link
+                    href="/most-asked"
+                    title="Most Asked"
+                    className={cn(
+                      SIDEBAR_NAV_ITEM_BASE,
+                      "justify-start",
+                      pathname === "/most-asked"
+                        ? SIDEBAR_NAV_ITEM_ACTIVE
+                        : SIDEBAR_NAV_ITEM_IDLE
+                    )}
+                  >
+                    <TrendingUp className="size-[1.125rem] shrink-0" aria-hidden />
+                    <span className="truncate">Most Asked</span>
+                  </Link>
+                </div>
+              )}
 
-            {user && sidebarCollapsed && (
-              <div className={cn(SIDEBAR_SECTION_CARD, "space-y-2 p-1.5")}>
-                <Link
-                  href="/chats"
-                  title="All chats"
-                  className={cn(
-                    SIDEBAR_NAV_ITEM_BASE,
-                    "justify-center px-0",
-                    pathname === "/chats" ? SIDEBAR_NAV_ITEM_ACTIVE : SIDEBAR_NAV_ITEM_IDLE
-                  )}
-                >
-                  <MessageSquare className="size-5 shrink-0" aria-hidden />
-                </Link>
+              {sidebarCollapsed && (
+                <div className="flex flex-col gap-0.5 px-0.5">
+                  <button
+                    type="button"
+                    onClick={handleNewChat}
+                    title="New chat"
+                    className={cn(
+                      SIDEBAR_NAV_ITEM_BASE,
+                      "cursor-pointer justify-center px-0",
+                      pathname === "/" ? SIDEBAR_NAV_ITEM_ACTIVE : SIDEBAR_NAV_ITEM_IDLE
+                    )}
+                  >
+                    <MessageSquarePlus className="size-[1.125rem] shrink-0" aria-hidden />
+                  </button>
+                  <Link
+                    href="/sources"
+                    title="Data Sources"
+                    className={cn(
+                      SIDEBAR_NAV_ITEM_BASE,
+                      "justify-center px-0",
+                      pathname === "/sources" ? SIDEBAR_NAV_ITEM_ACTIVE : SIDEBAR_NAV_ITEM_IDLE
+                    )}
+                  >
+                    <Database className="size-[1.125rem] shrink-0" aria-hidden />
+                  </Link>
+                  <Link
+                    href="/most-asked"
+                    title="Most Asked"
+                    className={cn(
+                      SIDEBAR_NAV_ITEM_BASE,
+                      "justify-center px-0",
+                      pathname === "/most-asked"
+                        ? SIDEBAR_NAV_ITEM_ACTIVE
+                        : SIDEBAR_NAV_ITEM_IDLE
+                    )}
+                  >
+                    <TrendingUp className="size-[1.125rem] shrink-0" aria-hidden />
+                  </Link>
+                  <Link
+                    href="/chats"
+                    title="All chats"
+                    className={cn(
+                      SIDEBAR_NAV_ITEM_BASE,
+                      "justify-center px-0",
+                      pathname === "/chats" ? SIDEBAR_NAV_ITEM_ACTIVE : SIDEBAR_NAV_ITEM_IDLE
+                    )}
+                  >
+                    <MessageSquare className="size-[1.125rem] shrink-0" aria-hidden />
+                  </Link>
+                </div>
+              )}
+            </div>
+
+            <div
+              className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1"
+              data-scrollbar
+            >
+              {user && conversationsError && !sidebarCollapsed && (
+                <Alert variant="destructive" className="px-3 py-2 text-[12px]">
+                  <AlertTitle className="text-[12px] leading-tight">Chat sync</AlertTitle>
+                  <AlertDescription className="break-words text-[11px] leading-snug">
+                    {conversationsError}
+                  </AlertDescription>
+                  <button
+                    type="button"
+                    onClick={() => clearConversationsError()}
+                    className="mt-1 flex items-center gap-1 text-[11px] underline opacity-90 hover:opacity-100"
+                  >
+                    <X className="size-3" aria-hidden />
+                    Dismiss
+                  </button>
+                </Alert>
+              )}
+              {user && conversationsError && sidebarCollapsed && (
                 <button
                   type="button"
-                  title="Most Asked — expand sidebar to pick a question"
-                  onClick={() => {
-                    if (sidebarCollapsed) toggleSidebar();
-                  }}
-                  className={cn(
-                    SIDEBAR_NAV_ITEM_BASE,
-                    SIDEBAR_NAV_ITEM_IDLE,
-                    "cursor-pointer justify-center px-0"
-                  )}
-                  aria-label="Most Asked; expand sidebar"
+                  title={`Chat sync: ${conversationsError}`}
+                  onClick={() => clearConversationsError()}
+                  className="mx-auto flex size-10 shrink-0 cursor-pointer items-center justify-center rounded-xl text-destructive transition-colors hover:bg-destructive/10"
+                  aria-label="Chat sync error; dismiss"
                 >
-                  <TrendingUp className="size-5 shrink-0" aria-hidden />
+                  <AlertCircle className="size-5" aria-hidden />
                 </button>
-              </div>
-            )}
+              )}
 
-            {user && !sidebarCollapsed && (
-              <div className={cn(SIDEBAR_SECTION_CARD, "space-y-2.5")}>
-                <div className="flex items-center gap-3 px-3 py-1">
-                  <div className="flex size-9 items-center justify-center rounded-xl bg-sidebar-primary/12 text-sidebar-foreground">
-                    <TrendingUp className="size-4 shrink-0" aria-hidden />
+              {user && !sidebarCollapsed && (
+                <div className="mt-2 space-y-0.5 border-t border-sidebar-border/60 pt-2">
+                  <div className="flex items-center justify-between gap-1.5 px-2.5">
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/75">
+                      {chatsPinned ? "Recent chats" : "Chats"}
+                    </p>
+                    <div className="flex shrink-0 items-center gap-0.5">
+                      {conversations.length > 0 && (
+                        <span className="inline-flex items-center rounded-full border border-sidebar-border/70 px-1.5 py-0.5 text-[9px] font-medium text-muted-foreground">
+                          {Math.min(conversations.length, SIDEBAR_CHATS_MAX)}
+                        </span>
+                      )}
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        onClick={toggleChatsPinned}
+                        className="size-8 cursor-pointer rounded-lg text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
+                        title={
+                          chatsPinned
+                            ? "Use collapsible chat list"
+                            : "Keep chat list always visible"
+                        }
+                        aria-label={
+                          chatsPinned
+                            ? "Use collapsible chat list"
+                            : "Keep chat list always visible"
+                        }
+                      >
+                        {chatsPinned ? (
+                          <PinOff className="size-3.5" aria-hidden />
+                        ) : (
+                          <Pin className="size-3.5" aria-hidden />
+                        )}
+                      </Button>
+                    </div>
                   </div>
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium text-sidebar-foreground">Most Asked</p>
-                    <p className="text-[11px] text-muted-foreground">Quick ways back into your analysis</p>
-                  </div>
+                  {conversations.length === 0 ? (
+                    <p className="px-2.5 py-1.5 text-[12px] text-muted-foreground/80">
+                      No chats yet
+                    </p>
+                  ) : chatsPinned ? (
+                    <div id="sidebar-chats-list" className="space-y-0.5 pr-0.5">
+                      {conversations.slice(0, SIDEBAR_CHATS_MAX).map((c) => {
+                        const selected = c.id === currentConversationId && pathname === "/";
+                        return (
+                          <button
+                            key={c.id}
+                            type="button"
+                            onClick={() => {
+                              if (c.id === currentConversationId && pathname === "/") return;
+                              loadConversation(c.id);
+                              if (pathname !== "/") router.push("/");
+                            }}
+                            className={cn(
+                              "flex w-full cursor-pointer items-center rounded-lg px-2.5 py-1.5 text-left text-[12px] transition-colors duration-150",
+                              selected
+                                ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                                : "text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
+                            )}
+                            title={c.title || "Untitled"}
+                          >
+                            <span className="truncate">{c.title || "Untitled"}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        onClick={toggleChatsSection}
+                        aria-expanded={chatsExpanded}
+                        aria-controls="sidebar-chats-list-collapsible"
+                        className={cn(
+                          SIDEBAR_NAV_ITEM_BASE,
+                          SIDEBAR_NAV_ITEM_IDLE,
+                          "cursor-pointer justify-between text-left"
+                        )}
+                      >
+                        <span className="flex min-w-0 items-center gap-3">
+                          <MessageSquare className="size-[1.125rem] shrink-0" aria-hidden />
+                          <span className="truncate">All chats</span>
+                        </span>
+                        <ChevronDown
+                          className={cn(
+                            "size-3.5 shrink-0 transition-transform duration-200",
+                            !chatsExpanded && "-rotate-90"
+                          )}
+                          aria-hidden
+                        />
+                      </button>
+                      {chatsExpanded && (
+                        <div
+                          id="sidebar-chats-list-collapsible"
+                          className="min-h-[2rem] space-y-0.5 pr-0.5"
+                        >
+                          {conversations.slice(0, SIDEBAR_CHATS_MAX).map((c) => {
+                            const selected = c.id === currentConversationId && pathname === "/";
+                            return (
+                              <button
+                                key={c.id}
+                                type="button"
+                                onClick={() => {
+                                  if (c.id === currentConversationId && pathname === "/") return;
+                                  loadConversation(c.id);
+                                  if (pathname !== "/") router.push("/");
+                                }}
+                                className={cn(
+                                  "flex w-full cursor-pointer items-center rounded-lg px-2.5 py-1.5 text-left text-[12px] transition-colors duration-150",
+                                  selected
+                                    ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                                    : "text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
+                                )}
+                                title={c.title || "Untitled"}
+                              >
+                                <span className="truncate">{c.title || "Untitled"}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </>
+                  )}
                 </div>
-                {mostAskedLoading && (
-                  <p className="px-3 pb-1 text-xs text-muted-foreground">Loading ideas…</p>
-                )}
-                {!mostAskedLoading && mostAskedQuestions.length === 0 && (
-                  <p className="px-3 pb-1 text-xs text-muted-foreground/80">No questions yet</p>
-                )}
-                {!mostAskedLoading &&
-                  mostAskedQuestions.length > 0 &&
-                  mostAskedQuestions.map((item) => (
-                    <button
-                      key={item.question}
-                      type="button"
-                      onClick={() => applyMostAskedQuestion(item.question)}
-                      className="flex w-full cursor-pointer rounded-xl border border-transparent px-3 py-2.5 text-left text-xs text-muted-foreground transition-all duration-200 hover:border-sidebar-border/70 hover:bg-sidebar-accent/55 hover:text-sidebar-foreground"
-                      title={item.question}
-                    >
-                      <span className="line-clamp-3">{item.question}</span>
-                    </button>
-                  ))}
-              </div>
-            )}
+              )}
+            </div>
           </div>
         </nav>
         <div
@@ -542,7 +549,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 sidebarCollapsed ? (
                   <div className="flex flex-col items-center gap-2">
                     <div
-                      className="flex size-11 items-center justify-center rounded-2xl border border-sidebar-border/80 bg-sidebar-primary/15 text-sm font-semibold text-sidebar-foreground shadow-sm"
+                      className="flex size-10 items-center justify-center rounded-lg bg-sidebar-primary/12 text-[12px] font-semibold text-sidebar-primary"
                       title={user.email}
                     >
                       {userInitials}
@@ -550,7 +557,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                     <Button
                       variant="ghost"
                       size="icon-lg"
-                      className="size-10 cursor-pointer rounded-xl text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
+                      className="size-9 cursor-pointer rounded-lg text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
                       title="Sign out"
                       onClick={() => signOut()}
                     >
@@ -558,31 +565,30 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                     </Button>
                   </div>
                 ) : (
-                  <div className="rounded-2xl border border-sidebar-border/70 bg-sidebar-accent/30 p-3 shadow-sm shadow-sidebar-primary/5">
-                    <div className="flex items-center gap-2.5">
-                      <div className="flex min-w-0 flex-1 items-center gap-3">
-                        <div className="flex size-11 items-center justify-center rounded-2xl border border-sidebar-border/80 bg-sidebar-primary/15 text-sm font-semibold text-sidebar-foreground">
-                          {userInitials}
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <p className="truncate text-sm font-semibold text-sidebar-foreground">
-                            {userDisplayName}
-                          </p>
-                          <p className="truncate text-xs text-muted-foreground" title={user.email}>
-                            {user.email}
-                          </p>
-                        </div>
-                      </div>
-                      <Button
-                        variant="ghost"
-                        className="h-10 shrink-0 cursor-pointer gap-1.5 rounded-xl border border-transparent px-3 text-xs font-medium text-sidebar-foreground hover:border-sidebar-border/70 hover:bg-sidebar-accent/70"
-                        title="Sign out"
-                        onClick={() => signOut()}
-                      >
-                        <LogOut className="size-3.5" />
-                        Sign out
-                      </Button>
+                  <div className="flex items-center gap-2.5 px-1 py-1">
+                    <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-sidebar-primary/12 text-[12px] font-semibold text-sidebar-primary">
+                      {userInitials}
                     </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-[12px] font-semibold text-sidebar-foreground">
+                        {userDisplayName}
+                      </p>
+                      <p
+                        className="truncate text-[10px] text-muted-foreground"
+                        title={user.email}
+                      >
+                        {user.email}
+                      </p>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      className="h-8 shrink-0 cursor-pointer gap-1 rounded-lg px-2 text-[11px] font-medium text-muted-foreground hover:bg-sidebar-accent/70 hover:text-sidebar-foreground"
+                      title="Sign out"
+                      onClick={() => signOut()}
+                    >
+                      <LogOut className="size-3.5" />
+                      <span className="hidden min-[280px]:inline">Sign out</span>
+                    </Button>
                   </div>
                 )
               ) : (
@@ -610,17 +616,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                     </Link>
                   </div>
                 ) : (
-                  <div className="rounded-2xl border border-sidebar-border/70 bg-sidebar-accent/30 p-3 shadow-sm shadow-sidebar-primary/5">
-                    <div className="space-y-1">
-                      <p className="text-sm font-semibold text-sidebar-foreground">
+                  <div className="space-y-2 px-0.5 py-1">
+                    <div className="space-y-1 px-0.5">
+                      <p className="text-[12px] font-semibold text-sidebar-foreground">
                         Sign in for saved chats
                       </p>
-                      <p className="text-xs leading-relaxed text-muted-foreground">
+                      <p className="text-[10px] leading-relaxed text-muted-foreground">
                         Keep your conversation history, sync personalized suggestions, and jump
                         back into previous analysis faster.
                       </p>
                     </div>
-                    <div className="mt-3 grid gap-2">
+                    <div className="grid gap-1.5">
                       <Link
                         href="/login"
                         title="Sign in"
@@ -674,7 +680,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </aside>
       <main
         className={cn(
-          "min-w-0 flex-1 pl-[var(--sidebar-width)]",
+          "flex min-h-screen min-w-0 flex-1 flex-col pl-[var(--sidebar-width)]",
           !isResizing && "transition-[padding-left] duration-200 ease-out"
         )}
       >

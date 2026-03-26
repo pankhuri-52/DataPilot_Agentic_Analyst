@@ -310,7 +310,7 @@ def create_conversation(
 @app.get("/conversations/frequent-questions")
 def get_frequent_questions(
     user=Depends(_require_user),
-    limit: int = Query(3, ge=1, le=10),
+    limit: int = Query(3, ge=1, le=50),
 ):
     """Top repeated questions for the signed-in user (for new-chat suggestions)."""
     try:

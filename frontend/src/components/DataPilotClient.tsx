@@ -737,75 +737,75 @@ export function DataPilotClient() {
         {user && messages.length > 0 && (suggestedLoading || suggestedQuestions.length > 0) && (
           <div
             className={cn(
-              "sticky top-0 z-10 mx-auto w-full max-w-xl rounded-xl border border-primary/20 bg-primary/5 px-4 py-4 text-left shadow-sm backdrop-blur-sm",
-              "dark:border-primary/30 dark:bg-primary/10 supports-[backdrop-filter]:bg-primary/5"
+              "sticky top-0 z-10 -mx-1 border-b border-border/50 bg-background/90 px-1 py-2 backdrop-blur-sm supports-[backdrop-filter]:bg-background/85",
+              "dark:border-border/40"
             )}
           >
-            <div className="flex items-start gap-2">
-              <Sparkles
-                className="mt-0.5 size-4 shrink-0 text-primary"
-                aria-hidden
-              />
-              <div className="min-w-0 flex-1 space-y-1">
-                <p className="text-sm font-medium text-foreground">
-                  {suggestedSource === "generic"
-                    ? "Try asking"
-                    : "Based on your past questions"}
-                </p>
-                <p className="text-xs text-muted-foreground leading-relaxed">
-                  {suggestedSource === "generic"
-                    ? "Starter questions that fit this warehouse."
-                    : "Suggestions use your chat history and, when available, similar successful queries we've saved — then we generate fresh ideas with AI."}
-                </p>
+            <div className="mx-auto w-full max-w-xl text-left">
+              <div className="flex items-start gap-2">
+                <Sparkles
+                  className="mt-0.5 size-3.5 shrink-0 text-primary"
+                  aria-hidden
+                />
+                <div className="min-w-0 flex-1 space-y-0.5">
+                  <p className="text-[12px] font-medium text-foreground">
+                    {suggestedSource === "generic"
+                      ? "Try asking"
+                      : "Based on your past questions"}
+                  </p>
+                  <p className="text-[10px] leading-snug text-muted-foreground">
+                    {suggestedSource === "generic"
+                      ? "Starter questions for this warehouse."
+                      : "From your history and similar saved queries, plus fresh AI ideas."}
+                  </p>
+                </div>
               </div>
+              {suggestedLoading && (
+                <p className="mt-2 text-[10px] text-muted-foreground">Loading…</p>
+              )}
+              {!suggestedLoading && suggestedQuestions.length > 0 && (
+                <ul className="mt-2 space-y-0.5">
+                  {suggestedQuestions.map((q, i) => (
+                    <li key={`${i}-${q.slice(0, 64)}`}>
+                      <button
+                        type="button"
+                        onClick={() => requestComposerQuery(q)}
+                        className={cn(
+                          "w-full rounded-lg px-2 py-1.5 text-left text-[12px] leading-snug text-foreground",
+                          "transition-colors hover:bg-muted/80"
+                        )}
+                      >
+                        {q}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
-            {suggestedLoading && (
-              <p className="mt-3 text-xs text-muted-foreground">Loading ideas…</p>
-            )}
-            {!suggestedLoading && suggestedQuestions.length > 0 && (
-              <ul className="mt-3 space-y-2">
-                {suggestedQuestions.map((q, i) => (
-                  <li key={`${i}-${q.slice(0, 64)}`}>
-                    <button
-                      type="button"
-                      onClick={() => requestComposerQuery(q)}
-                      className={cn(
-                        "w-full rounded-lg border border-border/80 bg-background/80 px-3 py-2.5 text-left text-xs leading-snug",
-                        "text-foreground transition-colors hover:border-primary/40 hover:bg-accent/50",
-                        "dark:bg-background/40"
-                      )}
-                    >
-                      {q}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
           </div>
         )}
 
         {messages.length === 0 && (
-          <div className="mx-auto flex w-full max-w-xl flex-col items-center px-2 py-8 text-center sm:py-12">
-            <h2 className="font-display text-lg font-semibold tracking-tight text-foreground sm:text-xl">
+          <div className="mx-auto flex w-full max-w-2xl flex-col items-center px-2 py-4 text-center sm:py-6">
+            <h2 className="font-display text-sm font-semibold tracking-tight text-foreground sm:text-base">
               {`Hey ${displayName}, what would you like to explore today?`}
             </h2>
             {user ? (
               <>
-                <p className="mt-2 max-w-md text-xs text-muted-foreground sm:text-sm">
+                <p className="mt-1.5 max-w-lg text-[10px] leading-snug text-muted-foreground sm:text-[11px]">
                   Here are some questions you might want to ask based on your history
                 </p>
                 {suggestedLoading && (
                   <ul
-                    className="mt-6 w-full max-w-full space-y-2 text-left"
+                    className="mt-3 flex w-full max-w-xl flex-col items-center space-y-1"
                     aria-busy="true"
                     aria-label="Loading suggestions"
                   >
                     {[0, 1, 2].map((i) => (
-                      <li key={i}>
+                      <li key={i} className="w-full max-w-xl">
                         <div
                           className={cn(
-                            "h-10 w-full rounded-lg border border-border/70 bg-muted/50",
-                            "animate-pulse"
+                            "mx-auto h-8 w-full max-w-xl rounded-lg bg-muted/40 animate-pulse"
                           )}
                         />
                       </li>
@@ -813,18 +813,16 @@ export function DataPilotClient() {
                   </ul>
                 )}
                 {!suggestedLoading && suggestedQuestions.length > 0 && (
-                  <ul className="mt-6 w-full space-y-2 text-left">
+                  <ul className="mt-3 flex w-full max-w-xl flex-col items-center space-y-0.5">
                     {suggestedQuestions.map((q, i) => (
-                      <li key={`${i}-${q.slice(0, 64)}`}>
+                      <li key={`${i}-${q.slice(0, 64)}`} className="w-full max-w-xl">
                         <button
                           type="button"
                           onClick={() => requestComposerQuery(q)}
                           className={cn(
-                            "w-full rounded-lg border border-border bg-background px-3 py-2 text-left text-xs leading-snug text-foreground sm:text-sm",
-                            "shadow-sm transition-colors",
-                            "hover:border-primary/50 hover:bg-accent/40",
-                            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
-                            "dark:bg-background/80"
+                            "w-full rounded-lg px-3 py-1.5 text-center text-[12px] leading-snug text-foreground",
+                            "transition-colors hover:bg-muted/80",
+                            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
                           )}
                         >
                           {q}
@@ -835,7 +833,7 @@ export function DataPilotClient() {
                 )}
               </>
             ) : (
-              <p className="mt-2 max-w-sm text-xs text-muted-foreground sm:text-sm">
+              <p className="mt-1.5 max-w-sm text-[10px] text-muted-foreground sm:text-[11px]">
                 Sign in to save your chat history and get personalized suggestions.
               </p>
             )}
@@ -1267,7 +1265,7 @@ export function DataPilotClient() {
         <div ref={messagesEndRef} />
       </div>
 
-      <div className="fixed bottom-0 left-[var(--sidebar-width)] right-0 z-20 border-border bg-background/95 px-4 py-3 sm:px-6 sm:py-3.5 backdrop-blur transition-[left] duration-200 ease-out supports-[backdrop-filter]:bg-background/80">
+      <div className="fixed bottom-0 left-[var(--sidebar-width)] right-0 z-40 border-border bg-background/95 px-4 py-3 sm:px-6 sm:py-3.5 backdrop-blur transition-[left] duration-200 ease-out supports-[backdrop-filter]:bg-background/80">
         <div className="mx-auto max-w-4xl">
           <form
             onSubmit={handleSubmit}

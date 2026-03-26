@@ -3,6 +3,7 @@ import "./globals.css";
 import { Fraunces, DM_Sans } from "next/font/google";
 import { cn } from "@/lib/utils";
 import { AuthProvider } from "@/contexts/AuthContext";
+import { ThemeProvider } from "@/contexts/ThemeContext";
 
 const fraunces = Fraunces({
   subsets: ["latin"],
@@ -27,9 +28,15 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className={cn("font-sans", dmSans.variable, fraunces.variable)}>
-      <body className="antialiased min-h-screen bg-background">
-        <AuthProvider>{children}</AuthProvider>
+    <html
+      lang="en"
+      className={cn("font-sans", dmSans.variable, fraunces.variable)}
+      suppressHydrationWarning
+    >
+      <body className="antialiased min-h-screen bg-background text-[15px] leading-normal">
+        <ThemeProvider>
+          <AuthProvider>{children}</AuthProvider>
+        </ThemeProvider>
       </body>
     </html>
   );

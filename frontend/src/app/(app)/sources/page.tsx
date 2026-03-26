@@ -170,7 +170,7 @@ export default function SourcesPage() {
       )}
 
       {loading && (
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+        <div className="flex items-center gap-2 text-[13px] text-muted-foreground">
           <Loader2 className="size-4 animate-spin" aria-hidden />
           Loading source status…
         </div>
@@ -189,10 +189,13 @@ export default function SourcesPage() {
 
       <section aria-labelledby="connectors-heading">
         <div className="mb-4 flex items-center justify-between gap-4">
-          <h2 id="connectors-heading" className="text-sm font-medium text-foreground">
+          <h2
+            id="connectors-heading"
+            className="font-display text-[14px] font-semibold tracking-tight text-foreground"
+          >
             Connectors
           </h2>
-          <Button onClick={() => setShowAddForm(true)} className="cursor-pointer" size="sm">
+          <Button onClick={() => setShowAddForm(true)} className="cursor-pointer text-[13px]" size="sm">
             <Plus className="mr-2 size-4" aria-hidden />
             Add source
           </Button>
@@ -228,14 +231,14 @@ export default function SourcesPage() {
                         <VendorIcon className={cn(dimmed && "grayscale-[0.35] opacity-80")} />
                       </div>
                       <div className="min-w-0 pt-0.5">
-                        <CardTitle className="text-base font-medium leading-tight">
+                        <CardTitle className="font-display text-[15px] font-semibold leading-snug tracking-tight text-foreground">
                           {entry.name}
                         </CardTitle>
-                        <CardDescription className="mt-1">
+                        <CardDescription className="mt-1 text-[13px] leading-snug text-muted-foreground">
                           {state === "live" && match?.label ? (
-                            <span className="text-foreground/80">{match.label}</span>
+                            <span className="text-foreground/85">{match.label}</span>
                           ) : state === "error" && match?.detail ? (
-                            <span className="break-words text-xs text-destructive">
+                            <span className="break-words text-[13px] leading-snug text-destructive">
                               {match.detail}
                             </span>
                           ) : state === "available" ? (
@@ -248,7 +251,7 @@ export default function SourcesPage() {
                     </div>
                     <span
                       className={cn(
-                        "inline-flex shrink-0 items-center rounded-full px-2.5 py-0.5 text-xs font-medium",
+                        "inline-flex shrink-0 items-center rounded-full px-2.5 py-0.5 text-[11px] font-medium",
                         badge.className
                       )}
                     >
@@ -265,15 +268,18 @@ export default function SourcesPage() {
       {showAddForm && (
         <Card className="animate-in fade-in slide-up duration-200">
           <CardHeader>
-            <CardTitle>Add data source</CardTitle>
-            <CardDescription>
+            <CardTitle className="font-display text-[15px] font-semibold tracking-tight">
+              Add data source
+            </CardTitle>
+            <CardDescription className="text-[13px] leading-snug">
               Multi-source management and OAuth-style connect flows are not implemented yet. Today,
-              configure BigQuery or Postgres in the backend <code className="text-xs">.env</code>.
+              configure BigQuery or Postgres in the backend{" "}
+              <code className="text-[12px]">.env</code>.
             </CardDescription>
           </CardHeader>
-          <CardContent className="space-y-4">
+          <CardContent className="space-y-4 text-[13px]">
             <div className="space-y-2">
-              <label htmlFor="source-name" className="text-sm font-medium">
+              <label htmlFor="source-name" className="font-medium text-foreground">
                 Name
               </label>
               <Input
@@ -284,7 +290,7 @@ export default function SourcesPage() {
               />
             </div>
             <div className="space-y-2">
-              <label htmlFor="source-type" className="text-sm font-medium">
+              <label htmlFor="source-type" className="font-medium text-foreground">
                 Type
               </label>
               <Input
