@@ -1,6 +1,7 @@
 import { AppShell } from "@/components/AppShell";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { ChatProvider } from "@/contexts/ChatContext";
+import { AppMainHeaderProvider } from "@/contexts/AppMainHeaderContext";
 
 export default function AppLayout({
   children,
@@ -9,9 +10,11 @@ export default function AppLayout({
 }>) {
   return (
     <ChatProvider>
-      <AppShell>
-        <ProtectedRoute>{children}</ProtectedRoute>
-      </AppShell>
+      <AppMainHeaderProvider>
+        <AppShell>
+          <ProtectedRoute>{children}</ProtectedRoute>
+        </AppShell>
+      </AppMainHeaderProvider>
     </ChatProvider>
   );
 }

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { cn } from "@/lib/utils";
+import { appTopHeaderStripClass } from "@/lib/appTopHeaderClasses";
 import {
   MessageSquarePlus,
   MessageSquare,
@@ -22,6 +23,8 @@ import {
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useChat } from "@/contexts/ChatContext";
+import { useAppMainHeader } from "@/contexts/AppMainHeaderContext";
+import { ThemeToggleButton } from "@/components/ThemeToggleButton";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
@@ -154,6 +157,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }, []);
 
   const { user, loading, signOut } = useAuth();
+  const { mainHeader } = useAppMainHeader();
   const {
     startNewChat,
     conversations,
@@ -233,28 +237,33 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         } as CSSProperties
       }
     >
-      <aside
+      <div
         className={cn(
-          "fixed left-0 top-0 z-30 flex h-screen w-[var(--sidebar-width)] flex-col overflow-hidden border-r border-sidebar-border bg-sidebar/95 backdrop-blur supports-[backdrop-filter]:bg-sidebar/80",
-          !isResizing && "transition-[width] duration-200 ease-out"
+          "fixed left-0 right-0 top-0 z-[45] grid min-h-[var(--app-chrome-header-h)] items-stretch",
+          appTopHeaderStripClass
         )}
+        style={{
+          gridTemplateColumns: "var(--sidebar-width) minmax(0, 1fr)",
+        }}
       >
         <div
           className={cn(
-            "flex min-h-16 shrink-0 items-center border-b border-primary/35 bg-primary/30 px-0 py-2 backdrop-blur-sm supports-[backdrop-filter]:bg-primary/28 dark:border-primary/40 dark:bg-primary/35 dark:supports-[backdrop-filter]:bg-primary/32",
-            sidebarCollapsed ? "justify-center px-2" : "gap-3 px-3.5"
+            "flex min-h-[var(--app-chrome-header-h)] min-w-0 border-r [border-right-color:var(--app-header-strip-border)]",
+            sidebarCollapsed
+              ? "items-center justify-center px-2 py-2.5"
+              : "items-start gap-3 px-3.5 py-2.5"
           )}
         >
           {!sidebarCollapsed && (
             <>
-              <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-sidebar-primary/12 text-[12px] font-semibold tracking-wide text-sidebar-primary">
+              <div className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary-foreground/18 text-[12px] font-semibold tracking-wide text-foreground dark:bg-primary-foreground/12">
                 DP
               </div>
-              <div className="flex min-h-0 min-w-0 flex-1 flex-col justify-center gap-1">
-                <p className="truncate font-display text-sm font-semibold tracking-tight text-sidebar-foreground">
+              <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-1">
+                <p className="m-0 truncate font-display text-sm font-semibold leading-tight tracking-tight text-foreground">
                   DataPilot
                 </p>
-                <p className="truncate text-[12px] leading-snug text-foreground/80">
+                <p className="m-0 truncate text-[12px] leading-snug text-foreground/90">
                   Analytics workspace
                 </p>
               </div>
@@ -265,7 +274,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             variant="ghost"
             size="icon"
             onClick={toggleSidebar}
-            className="size-9 shrink-0 cursor-pointer rounded-lg text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
+            className={cn(
+              "size-9 shrink-0 cursor-pointer rounded-lg text-foreground/85 hover:bg-primary-foreground/20 hover:text-foreground dark:hover:bg-primary-foreground/15",
+              !sidebarCollapsed && "mt-0.5"
+            )}
             aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
           >
             {sidebarCollapsed ? (
@@ -275,6 +287,35 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             )}
           </Button>
         </div>
+        <div className="flex min-h-[var(--app-chrome-header-h)] min-w-0 items-start justify-between gap-3 px-3 py-2.5 sm:px-6">
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-1">
+            {mainHeader ? (
+              <>
+                <h1 className="m-0 font-display text-sm font-semibold leading-tight tracking-tight text-foreground">
+                  {mainHeader.title}
+                </h1>
+                {mainHeader.description ? (
+                  <p className="m-0 text-[12px] leading-snug text-foreground/90 sm:text-[13px] sm:leading-snug">
+                    {mainHeader.description}
+                  </p>
+                ) : null}
+              </>
+            ) : (
+              <p className="m-0 font-display text-sm font-semibold leading-tight text-foreground/40">
+                DataPilot
+              </p>
+            )}
+          </div>
+          <ThemeToggleButton className="mt-0.5 size-9 shrink-0 text-foreground/85 hover:bg-primary-foreground/20 hover:text-foreground dark:text-foreground/90 dark:hover:bg-primary-foreground/15" />
+        </div>
+      </div>
+
+      <aside
+        className={cn(
+          "fixed left-0 top-[var(--app-chrome-header-h)] z-30 flex h-[calc(100svh-var(--app-chrome-header-h))] w-[var(--sidebar-width)] flex-col overflow-hidden border-r border-sidebar-border bg-sidebar/95 backdrop-blur supports-[backdrop-filter]:bg-sidebar/80",
+          !isResizing && "transition-[width] duration-200 ease-out"
+        )}
+      >
         <nav className="flex min-h-0 flex-1 flex-col px-2 py-3">
           <div className="flex min-h-0 flex-1 flex-col gap-3">
             <div className="shrink-0 space-y-0.5">
@@ -680,7 +721,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </aside>
       <main
         className={cn(
-          "flex min-h-screen min-w-0 flex-1 flex-col pl-[var(--sidebar-width)]",
+          "flex min-h-screen min-w-0 flex-1 flex-col pt-[var(--app-chrome-header-h)] pl-[var(--sidebar-width)]",
           !isResizing && "transition-[padding-left] duration-200 ease-out"
         )}
       >
