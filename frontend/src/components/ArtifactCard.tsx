@@ -137,7 +137,9 @@ export function ArtifactCard({
           aria-hidden
         >
           {chartSpec.title ? (
-            <p className="mb-2 text-center text-sm font-semibold text-slate-800">{chartSpec.title}</p>
+            <p className="mb-2 text-center font-display text-sm font-semibold tracking-tight text-slate-800">
+              {chartSpec.title}
+            </p>
           ) : null}
           <DataChart
             results={results}

@@ -186,12 +186,18 @@ function useStaggeredSubstepReveal(
   phaseStatus: PhaseStepStatus
 ): number {
   const prevLenRef = useRef(0);
+  const visibleCountRef = useRef(0);
   const [visibleCount, setVisibleCount] = useState(0);
+
+  useEffect(() => {
+    visibleCountRef.current = visibleCount;
+  }, [visibleCount]);
 
   useEffect(() => {
     const len = entriesLength;
     if (len === 0) {
       prevLenRef.current = 0;
+      visibleCountRef.current = 0;
       setVisibleCount(0);
       return;
     }
@@ -200,46 +206,47 @@ function useStaggeredSubstepReveal(
       typeof window !== "undefined" &&
       window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-    if (
-      phaseStatus === "done" ||
-      phaseStatus === "awaiting" ||
-      phaseStatus === "pending"
-    ) {
+    const shouldAnimate =
+      phaseStatus === "active" || phaseStatus === "done";
+
+    if (reduceMotion || !shouldAnimate) {
       prevLenRef.current = len;
-      setVisibleCount(len);
-      return;
-    }
-    if (phaseStatus !== "active") {
-      prevLenRef.current = len;
+      visibleCountRef.current = len;
       setVisibleCount(len);
       return;
     }
 
-    const prev = prevLenRef.current;
-    if (len === prev) return;
-
-    if (len < prev) {
+    const currentVisible = visibleCountRef.current;
+    if (len <= currentVisible) {
       prevLenRef.current = len;
-      setVisibleCount(len);
+      if (len < currentVisible) {
+        visibleCountRef.current = len;
+        setVisibleCount(len);
+      }
       return;
     }
 
-    const delta = len - prev;
+    const start = Math.max(currentVisible, Math.min(prevLenRef.current, len));
     prevLenRef.current = len;
 
-    if (reduceMotion || delta === 1) {
-      setVisibleCount(len);
+    let step = start;
+    if (start === 0) {
+      step = 1;
+      visibleCountRef.current = step;
+      setVisibleCount(step);
+    }
+    if (step >= len) {
       return;
     }
 
-    let step = prev;
-    setVisibleCount(step);
-    const staggerMs = 300;
+    const stepMs = phaseStatus === "done" ? 180 : 240;
     const id = window.setInterval(() => {
       step += 1;
+      visibleCountRef.current = step;
       setVisibleCount(step);
       if (step >= len) window.clearInterval(id);
-    }, staggerMs);
+    }, stepMs);
+
     return () => window.clearInterval(id);
   }, [entriesLength, phaseStatus]);
 

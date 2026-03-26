@@ -733,7 +733,7 @@ export function DataPilotClient() {
 
   return (
     <div className="flex flex-1 flex-col min-w-0">
-      <div className="space-y-6 pb-24">
+      <div className="space-y-6 pb-28 sm:pb-32">
         {user && messages.length > 0 && (suggestedLoading || suggestedQuestions.length > 0) && (
           <div
             className={cn(
@@ -1220,9 +1220,6 @@ export function DataPilotClient() {
                                 </a>
                               </p>
                             )}
-                            {res.chart_spec?.title && (
-                              <p className="text-sm font-medium">{res.chart_spec.title}</p>
-                            )}
                             {explanationText && (
                               <p className="text-sm text-muted-foreground">{res.explanation}</p>
                             )}
@@ -1270,11 +1267,11 @@ export function DataPilotClient() {
         <div ref={messagesEndRef} />
       </div>
 
-      <div className="fixed bottom-0 left-[var(--sidebar-width)] right-0 z-20 border-t border-border bg-background/95 px-4 py-4 backdrop-blur transition-[left] duration-200 ease-out supports-[backdrop-filter]:bg-background/80">
+      <div className="fixed bottom-0 left-[var(--sidebar-width)] right-0 z-20 border-border bg-background/95 px-4 py-3 sm:px-6 sm:py-3.5 backdrop-blur transition-[left] duration-200 ease-out supports-[backdrop-filter]:bg-background/80">
         <div className="mx-auto max-w-4xl">
           <form
             onSubmit={handleSubmit}
-            className="flex gap-2 rounded-xl border border-border bg-muted/30 p-2 transition-colors focus-within:border-primary/50 focus-within:ring-2 focus-within:ring-primary/20"
+            className="flex gap-2 rounded-2xl border border-border/80 bg-muted/40 p-2.5 shadow-sm transition-colors focus-within:border-primary/50 focus-within:ring-2 focus-within:ring-primary/20"
           >
             <Input
               ref={queryInputRef}
@@ -1282,13 +1279,13 @@ export function DataPilotClient() {
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               disabled={loading}
-              className="min-h-[44px] flex-1 border-0 bg-transparent focus-visible:ring-0 focus-visible:ring-offset-0"
+              className="min-h-[48px] flex-1 border-0 bg-transparent px-3 text-sm focus-visible:ring-0 focus-visible:ring-offset-0"
             />
             <Button
               type="submit"
               disabled={loading}
               size="icon"
-              className="size-11 shrink-0 cursor-pointer rounded-lg"
+              className="size-12 shrink-0 cursor-pointer rounded-xl"
             >
               {loading ? (
                 <Loader2 className="size-4 animate-spin" aria-hidden />

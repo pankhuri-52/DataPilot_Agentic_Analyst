@@ -47,6 +47,10 @@
     --space-8: 2rem;
     --space-10: 2.5rem;
     --space-12: 3rem;
+    --scrollbar-size: 0.625rem;
+    --scrollbar-track: transparent;
+    --scrollbar-thumb: oklch(0.72 0.02 70 / 0.55);
+    --scrollbar-thumb-hover: oklch(0.55 0.09 78 / 0.9);
   }
   .dark {
     --background: oklch(0.14 0.02 260);
@@ -80,6 +84,8 @@
     --sidebar-accent-foreground: oklch(0.95 0.01 85);
     --sidebar-border: oklch(0.3 0.02 260);
     --sidebar-ring: oklch(0.65 0.1 165);
+    --scrollbar-thumb: oklch(0.42 0.02 260 / 0.55);
+    --scrollbar-thumb-hover: oklch(0.66 0.09 165 / 0.9);
   }
   .theme {
     --font-sans: var(--font-sans);
@@ -98,6 +104,204 @@
   }
   html {
     @apply font-sans;
+  }
+  h1,
+  h2,
+  h3,
+  [data-slot="card-title"] {
+    @apply font-display tracking-tight;
+  }
+  :where(
+    html,
+    body,
+    [data-scrollbar],
+    .overflow-auto,
+    .overflow-y-auto,
+    .overflow-x-auto,
+    .overflow-scroll,
+    .overflow-y-scroll,
+    .overflow-x-scroll
+  ) {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+  }
+  :where(
+      html,
+      body,
+      [data-scrollbar],
+      .overflow-auto,
+      .overflow-y-auto,
+      .overflow-x-auto,
+      .overflow-scroll,
+      .overflow-y-scroll,
+      .overflow-x-scroll
+    ):hover,
+    :where(
+      html,
+      body,
+      [data-scrollbar],
+      .overflow-auto,
+      .overflow-y-auto,
+      .overflow-x-auto,
+      .overflow-scroll,
+      .overflow-y-scroll,
+      .overflow-x-scroll
+    ):focus-within,
+    :where(
+      html,
+      body,
+      [data-scrollbar],
+      .overflow-auto,
+      .overflow-y-auto,
+      .overflow-x-auto,
+      .overflow-scroll,
+      .overflow-y-scroll,
+      .overflow-x-scroll
+    ):active {
+    scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+  }
+  :where(
+    html,
+    body,
+    [data-scrollbar],
+    .overflow-auto,
+    .overflow-y-auto,
+    .overflow-x-auto,
+    .overflow-scroll,
+    .overflow-y-scroll,
+    .overflow-x-scroll
+  )::-webkit-scrollbar {
+    width: var(--scrollbar-size);
+    height: var(--scrollbar-size);
+    background: transparent;
+  }
+  :where(
+    html,
+    body,
+    [data-scrollbar],
+    .overflow-auto,
+    .overflow-y-auto,
+    .overflow-x-auto,
+    .overflow-scroll,
+    .overflow-y-scroll,
+    .overflow-x-scroll
+  )::-webkit-scrollbar-track,
+  :where(
+    html,
+    body,
+    [data-scrollbar],
+    .overflow-auto,
+    .overflow-y-auto,
+    .overflow-x-auto,
+    .overflow-scroll,
+    .overflow-y-scroll,
+    .overflow-x-scroll
+  )::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+  :where(
+    html,
+    body,
+    [data-scrollbar],
+    .overflow-auto,
+    .overflow-y-auto,
+    .overflow-x-auto,
+    .overflow-scroll,
+    .overflow-y-scroll,
+    .overflow-x-scroll
+  )::-webkit-scrollbar-thumb {
+    min-height: 2.5rem;
+    border: 2px solid transparent;
+    border-radius: 999px;
+    background: transparent;
+    background-clip: content-box;
+  }
+  :where(
+      html,
+      body,
+      [data-scrollbar],
+      .overflow-auto,
+      .overflow-y-auto,
+      .overflow-x-auto,
+      .overflow-scroll,
+      .overflow-y-scroll,
+      .overflow-x-scroll
+    ):hover::-webkit-scrollbar-thumb,
+    :where(
+      html,
+      body,
+      [data-scrollbar],
+      .overflow-auto,
+      .overflow-y-auto,
+      .overflow-x-auto,
+      .overflow-scroll,
+      .overflow-y-scroll,
+      .overflow-x-scroll
+    ):focus-within::-webkit-scrollbar-thumb,
+    :where(
+      html,
+      body,
+      [data-scrollbar],
+      .overflow-auto,
+      .overflow-y-auto,
+      .overflow-x-auto,
+      .overflow-scroll,
+      .overflow-y-scroll,
+      .overflow-x-scroll
+    ):active::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-thumb);
+    background-clip: content-box;
+  }
+  :where(
+      html,
+      body,
+      [data-scrollbar],
+      .overflow-auto,
+      .overflow-y-auto,
+      .overflow-x-auto,
+      .overflow-scroll,
+      .overflow-y-scroll,
+      .overflow-x-scroll
+    ):hover::-webkit-scrollbar-thumb:hover,
+    :where(
+      html,
+      body,
+      [data-scrollbar],
+      .overflow-auto,
+      .overflow-y-auto,
+      .overflow-x-auto,
+      .overflow-scroll,
+      .overflow-y-scroll,
+      .overflow-x-scroll
+    ):focus-within::-webkit-scrollbar-thumb:hover,
+    :where(
+      html,
+      body,
+      [data-scrollbar],
+      .overflow-auto,
+      .overflow-y-auto,
+      .overflow-x-auto,
+      .overflow-scroll,
+      .overflow-y-scroll,
+      .overflow-x-scroll
+    ):active::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-thumb-hover);
+    background-clip: content-box;
+  }
+  :where(
+    html,
+    body,
+    [data-scrollbar],
+    .overflow-auto,
+    .overflow-y-auto,
+    .overflow-x-auto,
+    .overflow-scroll,
+    .overflow-y-scroll,
+    .overflow-x-scroll
+  )::-webkit-scrollbar-button {
+    display: none;
+    width: 0;
+    height: 0;
   }
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after {
