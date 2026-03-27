@@ -67,7 +67,10 @@ def build_initial_runtime_state(user_id: str | None, source_id: str | None) -> d
     """
     Fields merged into LangGraph initial state: schema_catalog, hints, source labels.
     """
-    from agents.schema_utils import load_schema
+    from data_sources.catalog_resolve import (
+        build_multi_source_planner_digest,
+        load_schema_catalog_for_source,
+    )
     from data_sources.service import list_sources
 
     sid = (source_id or "primary").strip() or "primary"
@@ -118,34 +121,16 @@ def build_initial_runtime_state(user_id: str | None, source_id: str | None) -> d
             }
         )
 
-    schema_catalog = load_schema()
-    data_source_label = "Primary warehouse (metadata.json)"
     effective_sid = sid
-
     if sid != "primary" and user_id:
-        from core.credentials_crypto import decrypt_config
         from data_sources.service import get_source
 
-        row = get_source(user_id, sid)
-        if row:
-            snap = row.get("schema_snapshot")
-            if isinstance(snap, dict) and snap.get("tables"):
-                schema_catalog = snap
-            data_source_label = row.get("label") or sid
-            try:
-                cfg = decrypt_config(row["encrypted_config"])
-            except Exception:
-                cfg = {}
-            st = row["source_type"]
-            if st in ("postgres", "csv_upload"):
-                hints["postgres_schema"] = cfg.get("schema") or "public"
-            elif st == "bigquery":
-                hints["bigquery_project"] = cfg.get("project_id")
-                hints["bigquery_dataset"] = cfg.get("dataset_id")
-        else:
-            # Unknown id — fall back to primary catalog
+        if not get_source(user_id, sid):
             effective_sid = "primary"
-            data_source_label = "Primary warehouse (metadata.json)"
+
+    schema_catalog, data_source_label, hints = load_schema_catalog_for_source(user_id, effective_sid)
+
+    multi_source_schema_digest = build_multi_source_planner_digest(available, user_id, effective_sid)
 
     summary_lines = [f"- `{s['id']}`: {s['label']} ({s['type']})" for s in available]
     summary = (
@@ -164,4 +149,5 @@ def build_initial_runtime_state(user_id: str | None, source_id: str | None) -> d
         "available_sources": available,
         "available_sources_summary": full_summary,
         "data_source_label": data_source_label,
+        "multi_source_schema_digest": multi_source_schema_digest,
     }

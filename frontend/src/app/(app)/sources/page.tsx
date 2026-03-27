@@ -152,7 +152,7 @@ function DataSourceModalChrome({
 }) {
   return createPortal(
     <div
-      className="fixed inset-x-0 bottom-0 top-[var(--app-chrome-header-h)] z-[70] flex items-center justify-center bg-black/50 p-4"
+      className="fixed inset-x-0 bottom-0 top-[max(5.25rem,var(--app-chrome-header-h))] z-[70] flex items-center justify-center bg-black/50 p-4"
       role="dialog"
       aria-modal="true"
       aria-labelledby="ds-modal-title"

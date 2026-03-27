@@ -10,6 +10,28 @@ from typing import Any
 from core.postgres_dsn import sanitize_postgres_uri_for_psycopg2
 
 
+def _column_samples_from_rows(
+    header: list[str],
+    data_rows: list[list[str]],
+    *,
+    max_scan: int = 200,
+    max_unique: int = 5,
+    max_len: int = 80,
+) -> dict[str, list[str]]:
+    seen: dict[str, set[str]] = {h: set() for h in header}
+    out: dict[str, list[str]] = {h: [] for h in header}
+    for row in data_rows[:max_scan]:
+        for i, h in enumerate(header):
+            if len(out[h]) >= max_unique:
+                continue
+            val = (row[i] if i < len(row) else "").strip()
+            if not val or val in seen[h]:
+                continue
+            seen[h].add(val)
+            out[h].append(val[:max_len])
+    return out
+
+
 def _sanitize_col(name: str) -> str:
     s = re.sub(r"[^a-zA-Z0-9_]", "_", (name or "").strip())
     if not s:
@@ -82,6 +104,7 @@ def load_csv_into_schema(
     table_desc = table_label
     if ctx:
         table_desc = f"{table_label}. {ctx[:1500]}{'…' if len(ctx) > 1500 else ''}"
+    samples = _column_samples_from_rows(header, data_rows)
     catalog: dict[str, Any] = {
         "dataset": upload_schema,
         "description": f"User-uploaded CSV in Postgres ({table_label}).",
@@ -91,7 +114,15 @@ def load_csv_into_schema(
             {
                 "name": table_name,
                 "description": table_desc,
-                "columns": [{"name": c, "type": "STRING", "description": ""} for c in header],
+                "columns": [
+                    {
+                        "name": c,
+                        "type": "STRING",
+                        "description": "",
+                        **({"sample_values": samples[c]} if samples.get(c) else {}),
+                    }
+                    for c in header
+                ],
             }
         ],
         "relationships": [],

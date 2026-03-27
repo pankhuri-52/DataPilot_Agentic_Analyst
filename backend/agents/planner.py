@@ -42,6 +42,8 @@ User question: {query}
 
 {SOURCES_SUMMARY_SECTION}
 
+{MULTI_SOURCE_SCHEMA_SECTION}
+
 {IMPORT_CONTEXT_SECTION}
 
 {DATA_AVAILABILITY_SECTION}
@@ -65,7 +67,8 @@ Your job:
    - "needs_clarification": the user might mean a data question but it is too vague to plan (set is_valid=false and add clarifying_questions).
 
 Rules:
-- If WAREHOUSE / SOURCES CONTEXT lists multiple connections, the user (or UI) has selected one **active** source for this question. Plan only for that source’s data; do not assume cross-database joins.
+- If MULTI-SOURCE SCHEMA DIGEST is present above: you MUST set resolved_source_id to exactly one of the source ids shown (the value in backticks after “Source id:”). Choose the database whose tables and domains match the user’s question (e.g. HR/employees vs retail orders). If two sources could apply, prefer the one marked **UI-selected default**. Downstream SQL cannot join across sources; plan only for the chosen source.
+- If multi-source digest is NOT present: leave resolved_source_id null or empty. Plan for the single active source described in WAREHOUSE / SOURCES CONTEXT.
 - Only analytics questions about business data (sales, orders, products, customers, brands, campaigns, fulfillment, returns, reps) are valid when they map to the connected warehouse — **unless** USER-UPLOADED SPREADSHEET rules appear below; then follow those for validity.
 - Use lowercase for metric/dimension names that could map to database columns.
 - For date filters, use keys like "start_date", "end_date" or "period" (e.g. "last_quarter").
@@ -229,7 +232,14 @@ def run_planner(state: dict) -> dict:
 
     try:
         schema = get_effective_schema(state)
-        data_ranges_str = extract_data_ranges(schema)
+        multi_digest = (state.get("multi_source_schema_digest") or "").strip()
+        if multi_digest:
+            from data_sources.catalog_resolve import combined_data_ranges_multisource
+
+            combined = combined_data_ranges_multisource(state)
+            data_ranges_str = combined if combined.strip() else extract_data_ranges(schema)
+        else:
+            data_ranges_str = extract_data_ranges(schema)
         data_section = (
             f"DATA AVAILABILITY (use this to validate time-based questions):\n{data_ranges_str}\n\n"
             if "available from" in data_ranges_str
@@ -269,12 +279,25 @@ def run_planner(state: dict) -> dict:
         if import_context_section:
             import_context_section += "\n\n"
 
+        if multi_digest:
+            multi_source_schema_section = (
+                "MULTI-SOURCE SCHEMA (each block is one database — pick exactly one `resolved_source_id`):\n\n"
+                + multi_digest
+                + "\n"
+            )
+        else:
+            multi_source_schema_section = (
+                "SINGLE-SOURCE MODE: There is only one logical warehouse context for this session. "
+                "Leave resolved_source_id empty. Plan using WAREHOUSE / SOURCES CONTEXT and DATA AVAILABILITY only.\n\n"
+            )
+
         llm = get_gemini()
         structured_llm = llm.with_structured_output(AnalysisPlan, method="json_mode")
         prompt = PLANNER_PROMPT.format(
             query=query,
             CONVERSATION_HISTORY_SECTION=history_section or "",
             SOURCES_SUMMARY_SECTION=sources_block,
+            MULTI_SOURCE_SCHEMA_SECTION=multi_source_schema_section,
             IMPORT_CONTEXT_SECTION=import_context_section,
             DATA_AVAILABILITY_SECTION=data_section or "No date-range metadata available; skip time-range validation.",
         )
@@ -297,8 +320,29 @@ def run_planner(state: dict) -> dict:
 
         _normalize_execution_steps(plan_dict)
 
+        from data_sources.catalog_resolve import apply_planner_source_resolution
+
+        routed: dict = {}
         if plan_dict.get("is_valid"):
-            ds_label = (state.get("data_source_label") or "").strip()
+            routed = apply_planner_source_resolution(state, plan_dict)
+            prev_sid = (state.get("active_source_id") or "primary").strip() or "primary"
+            new_sid = (routed.get("active_source_id") or "").strip()
+            if new_sid and new_sid != prev_sid:
+                append_trace(
+                    trace,
+                    TraceEntry(
+                        agent="planner",
+                        status="info",
+                        message=f"Selected data source `{routed['active_source_id']}` for this question",
+                        output={
+                            "resolved_source_id": routed["active_source_id"],
+                            "label": routed.get("data_source_label"),
+                        },
+                    ).model_dump(),
+                )
+
+        if plan_dict.get("is_valid"):
+            ds_label = (routed.get("data_source_label") or state.get("data_source_label") or "").strip()
             plan_msg = "Plan created – query is valid and within data range"
             if ds_label:
                 plan_msg = f"Plan created – using data source: {ds_label}"
@@ -315,6 +359,7 @@ def run_planner(state: dict) -> dict:
                         "filters": plan_dict.get("filters", {}),
                         "result_limit": plan_dict.get("result_limit"),
                         "execution_steps": plan_dict.get("execution_steps", []),
+                        "resolved_source_id": plan_dict.get("resolved_source_id"),
                     },
                 ).model_dump(),
             )
@@ -329,7 +374,8 @@ def run_planner(state: dict) -> dict:
                 ).model_dump(),
             )
 
-        return {"plan": plan_dict, "trace": trace}
+        out: dict = {"plan": plan_dict, "trace": trace, **routed}
+        return out
     except Exception as e:
         append_trace(
             trace,

@@ -71,7 +71,7 @@ def connect_demo_postgres(user=Depends(require_user)):
         from data_sources.introspect import introspect_postgres, schema_fingerprint
         from data_sources.service import insert_source
 
-        catalog = introspect_postgres(schema, connect_kwargs=connect_kwargs)
+        catalog = introspect_postgres(schema, connect_kwargs=connect_kwargs, include_samples=True)
         fp = schema_fingerprint(catalog)
         enc = encrypt_config({**connect_kwargs, "schema": schema})
         row = insert_source(
@@ -127,7 +127,7 @@ def connect_bigquery(body: dict = Body(default_factory=dict), user=Depends(requi
         from data_sources.introspect import introspect_bigquery, schema_fingerprint
         from data_sources.service import insert_source
 
-        catalog = introspect_bigquery(project_id, dataset_id, client)
+        catalog = introspect_bigquery(project_id, dataset_id, client, include_samples=True)
         fp = schema_fingerprint(catalog)
         enc = encrypt_config(
             {"project_id": project_id, "dataset_id": dataset_id, "credentials_json": sa},
@@ -263,7 +263,7 @@ def refresh_schema(source_id: str, user=Depends(require_user)):
             url = cfg["connection_url"]
             schema = cfg.get("schema") or "public"
             table = cfg.get("table")
-            full = introspect_postgres(schema, connection_url=url)
+            full = introspect_postgres(schema, connection_url=url, include_samples=True)
             if table:
                 tables = [t for t in (full.get("tables") or []) if t.get("name") == table]
                 catalog = {**full, "tables": tables, "description": row.get("label") or full.get("description")}
@@ -279,12 +279,12 @@ def refresh_schema(source_id: str, user=Depends(require_user)):
                     "user": cfg["user"],
                     "password": cfg.get("password") or "",
                 }
-                catalog = introspect_postgres(schema, connect_kwargs=kw)
+                catalog = introspect_postgres(schema, connect_kwargs=kw, include_samples=True)
             else:
                 url = cfg.get("connection_url")
                 if not url:
                     raise HTTPException(status_code=400, detail="Missing connection_url or host/dbname in config")
-                catalog = introspect_postgres(schema, connection_url=url)
+                catalog = introspect_postgres(schema, connection_url=url, include_samples=True)
         elif st == "bigquery":
             sa = cfg.get("credentials_json")
             if isinstance(sa, str):
@@ -294,7 +294,9 @@ def refresh_schema(source_id: str, user=Depends(require_user)):
 
             creds = service_account.Credentials.from_service_account_info(sa)
             client = bigquery.Client(project=cfg["project_id"], credentials=creds)
-            catalog = introspect_bigquery(cfg["project_id"], cfg["dataset_id"], client)
+            catalog = introspect_bigquery(
+                cfg["project_id"], cfg["dataset_id"], client, include_samples=True
+            )
         else:
             raise HTTPException(status_code=400, detail=f"Unknown source_type {st}")
         fp = schema_fingerprint(catalog)

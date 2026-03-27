@@ -33,7 +33,7 @@ export function AppPageShell({
         >
           <div
             className={cn(
-              "mx-auto max-w-4xl px-4 py-3 sm:px-6 sm:py-4",
+              "mx-auto max-w-4xl px-4 pb-3 pt-4 sm:px-6 sm:pb-4 sm:pt-5",
               bodyClassName
             )}
           >

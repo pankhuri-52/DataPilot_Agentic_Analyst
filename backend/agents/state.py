@@ -39,6 +39,13 @@ class AnalysisPlan(BaseModel):
         default_factory=list,
         description="When is_valid=true: exactly 6 steps in pipeline order (planner→…→visualization) for the UI checklist",
     )
+    resolved_source_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "When MULTI-SOURCE SCHEMA DIGEST is present, set to the exact source id string "
+            "(e.g. primary or a UUID) for the database that should answer this question."
+        ),
+    )
 
 
 class DataFeasibility(BaseModel):
@@ -75,6 +82,7 @@ class DataPilotState(TypedDict, total=False):
     available_sources: Optional[list[dict[str, Any]]]  # Lightweight list for UI / planner context
     available_sources_summary: Optional[str]  # Prompt text: connected sources + active
     data_source_label: Optional[str]  # Human label for traces
+    multi_source_schema_digest: Optional[str]  # Full multi-source schema text for planner when 2+ sources
     conversation_history: list[dict[str, Any]]  # [{role, content, metadata?}] for conversational context
     plan: Optional[dict[str, Any]]  # AnalysisPlan as dict
     data_feasibility: str  # "full" | "partial" | "none"

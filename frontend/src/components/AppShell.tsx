@@ -265,7 +265,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <div
         ref={appChromeHeaderRef}
         className={cn(
-          "fixed left-0 right-0 top-0 z-[60] grid items-stretch",
+          "fixed left-0 right-0 top-0 z-[70] grid items-stretch",
           appTopHeaderStripClass
         )}
         style={{
@@ -314,10 +314,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </Button>
         </div>
         <div className="flex min-w-0 items-start justify-between gap-3 px-3 py-2.5 sm:px-6">
-          <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-1">
+          <div className="flex min-w-0 flex-1 flex-col gap-1 overflow-visible py-0.5">
             {mainHeader ? (
               <>
-                <h1 className="m-0 font-display text-sm font-semibold leading-tight tracking-tight text-foreground">
+                <h1 className="m-0 break-words font-display text-base font-semibold leading-snug tracking-tight text-foreground sm:text-lg sm:leading-snug">
                   {mainHeader.title}
                 </h1>
                 {mainHeader.description ? (
@@ -338,7 +338,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
       <aside
         className={cn(
-          "fixed left-0 top-[var(--app-chrome-header-h)] z-30 flex h-[calc(100svh-var(--app-chrome-header-h))] w-[var(--sidebar-width)] flex-col overflow-hidden border-r border-sidebar-border bg-sidebar/95 backdrop-blur supports-[backdrop-filter]:bg-sidebar/80",
+          "fixed left-0 z-30 flex w-[var(--sidebar-width)] flex-col overflow-hidden border-r border-sidebar-border bg-sidebar/95 backdrop-blur supports-[backdrop-filter]:bg-sidebar/80",
+          "top-[max(5.25rem,var(--app-chrome-header-h))] h-[calc(100svh-max(5.25rem,var(--app-chrome-header-h)))]",
           !isResizing && "transition-[width] duration-200 ease-out"
         )}
       >
@@ -747,7 +748,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </aside>
       <main
         className={cn(
-          "flex min-h-screen min-w-0 flex-1 flex-col pt-[var(--app-chrome-header-h)] pl-[var(--sidebar-width)]",
+          "relative z-0 flex min-h-screen min-w-0 flex-1 flex-col pl-[var(--sidebar-width)]",
+          /* Keep content below fixed chrome; max() guards if measured height lags wrapping/fonts */
+          "pt-[max(5.25rem,var(--app-chrome-header-h))]",
           !isResizing && "transition-[padding-left] duration-200 ease-out"
         )}
       >

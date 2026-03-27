@@ -8,7 +8,7 @@
       "columns": [
         {"name": "brand_id", "type": "STRING", "description": "Primary key. Unique brand identifier."},
         {"name": "name", "type": "STRING", "description": "Brand display name."},
-        {"name": "country", "type": "STRING", "description": "Country of brand headquarters or primary market."},
+        {"name": "country", "type": "STRING", "description": "Country of brand headquarters or primary market.", "sample_values": ["United States", "Germany", "Japan", "United Kingdom"]},
         {"name": "created_at", "type": "TIMESTAMP", "description": "When the record was created."}
       ]
     },
@@ -19,7 +19,7 @@
         {"name": "sales_rep_id", "type": "STRING", "description": "Primary key. Unique sales rep identifier."},
         {"name": "full_name", "type": "STRING", "description": "Rep full name."},
         {"name": "email", "type": "STRING", "description": "Work email."},
-        {"name": "region", "type": "STRING", "description": "Rep home region (North, South, East, West)."},
+        {"name": "region", "type": "STRING", "description": "Rep home region (North, South, East, West).", "sample_values": ["North", "South", "East", "West"]},
         {"name": "hired_at", "type": "DATE", "description": "Hire date."},
         {"name": "created_at", "type": "TIMESTAMP", "description": "When the record was created."}
       ]
@@ -41,7 +41,7 @@
       "columns": [
         {"name": "campaign_id", "type": "STRING", "description": "Primary key. Campaign identifier."},
         {"name": "name", "type": "STRING", "description": "Campaign name."},
-        {"name": "channel", "type": "STRING", "description": "Channel (email, paid_search, social, events, display, partner, organic)."},
+        {"name": "channel", "type": "STRING", "description": "Channel (email, paid_search, social, events, display, partner, organic).", "sample_values": ["email", "paid_search", "social", "display", "organic"]},
         {"name": "start_date", "type": "DATE", "description": "Campaign start (inclusive)."},
         {"name": "end_date", "type": "DATE", "description": "Campaign end (inclusive)."},
         {"name": "budget", "type": "NUMERIC", "description": "Planned spend in currency."},
@@ -54,7 +54,7 @@
       "columns": [
         {"name": "product_id", "type": "STRING", "description": "Primary key. Unique product identifier."},
         {"name": "name", "type": "STRING", "description": "Display name of the product."},
-        {"name": "category", "type": "STRING", "description": "Product category (Electronics, Home, Furniture, Office)."},
+        {"name": "category", "type": "STRING", "description": "Product category (Electronics, Home, Furniture, Office).", "sample_values": ["Electronics", "Home", "Furniture", "Office"]},
         {"name": "unit_price", "type": "NUMERIC", "description": "Price per unit in currency."},
         {"name": "created_at", "type": "TIMESTAMP", "description": "When the record was created."},
         {"name": "brand_id", "type": "STRING", "description": "Foreign key to brands.brand_id."}
@@ -66,8 +66,8 @@
       "columns": [
         {"name": "customer_id", "type": "STRING", "description": "Primary key. Unique customer identifier."},
         {"name": "name", "type": "STRING", "description": "Customer/company name."},
-        {"name": "region", "type": "STRING", "description": "Sales region (North, South, East, West)."},
-        {"name": "segment", "type": "STRING", "description": "Customer segment (Enterprise, SMB, Startup)."},
+        {"name": "region", "type": "STRING", "description": "Sales region (North, South, East, West).", "sample_values": ["North", "South", "East", "West"]},
+        {"name": "segment", "type": "STRING", "description": "Customer segment (Enterprise, SMB, Startup).", "sample_values": ["Enterprise", "SMB", "Startup"]},
         {"name": "created_at", "type": "TIMESTAMP", "description": "When the record was created."},
         {"name": "sales_rep_id", "type": "STRING", "description": "Foreign key to sales_reps.sales_rep_id."}
       ]
@@ -79,7 +79,7 @@
         {"name": "order_id", "type": "STRING", "description": "Primary key. Unique order identifier."},
         {"name": "customer_id", "type": "STRING", "description": "Foreign key to customers.customer_id."},
         {"name": "order_date", "type": "DATE", "description": "Date the order was placed.", "data_range": {"min": "2024-03-01", "max": "2025-03-01"}},
-        {"name": "status", "type": "STRING", "description": "Order status (completed, pending, cancelled)."},
+        {"name": "status", "type": "STRING", "description": "Order status (completed, pending, cancelled).", "sample_values": ["completed", "pending", "cancelled"]},
         {"name": "total_amount", "type": "NUMERIC", "description": "Order total in currency."},
         {"name": "created_at", "type": "TIMESTAMP", "description": "When the record was created."}
       ]
@@ -103,8 +103,8 @@
         {"name": "order_id", "type": "STRING", "description": "Foreign key to orders.order_id."},
         {"name": "warehouse_id", "type": "STRING", "description": "Foreign key to warehouses.warehouse_id."},
         {"name": "ship_date", "type": "DATE", "description": "Ship date.", "data_range": {"min": "2024-03-02", "max": "2025-03-07"}},
-        {"name": "carrier", "type": "STRING", "description": "Carrier (UPS, FedEx, DHL)."},
-        {"name": "status", "type": "STRING", "description": "Shipment status (delivered, delayed)."},
+        {"name": "carrier", "type": "STRING", "description": "Carrier (UPS, FedEx, DHL).", "sample_values": ["UPS", "FedEx", "DHL"]},
+        {"name": "status", "type": "STRING", "description": "Shipment status (delivered, delayed).", "sample_values": ["delivered", "delayed"]},
         {"name": "created_at", "type": "TIMESTAMP", "description": "When the record was created."}
       ]
     },
@@ -118,7 +118,7 @@
         {"name": "return_date", "type": "DATE", "description": "Return processed date.", "data_range": {"min": "2024-03-08", "max": "2025-04-15"}},
         {"name": "quantity", "type": "INT64", "description": "Units returned."},
         {"name": "refund_amount", "type": "NUMERIC", "description": "Refund in currency."},
-        {"name": "reason_code", "type": "STRING", "description": "Return reason (defective, changed_mind, not_as_described, duplicate_order)."},
+        {"name": "reason_code", "type": "STRING", "description": "Return reason (defective, changed_mind, not_as_described, duplicate_order).", "sample_values": ["defective", "changed_mind", "not_as_described", "duplicate_order"]},
         {"name": "created_at", "type": "TIMESTAMP", "description": "When the record was created."}
       ]
     },
