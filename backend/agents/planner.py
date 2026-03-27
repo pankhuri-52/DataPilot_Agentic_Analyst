@@ -7,7 +7,8 @@ import json
 from llm import get_gemini, invoke_with_retry
 from agents.state import AnalysisPlan, TraceEntry
 from agents.trace_stream import append_trace
-from agents.schema_utils import load_schema, extract_data_ranges
+from agents.context import get_effective_schema
+from agents.schema_utils import extract_data_ranges
 
 EXECUTION_PHASE_ORDER = (
     "planner",
@@ -39,6 +40,8 @@ User question: {query}
 
 {CONVERSATION_HISTORY_SECTION}
 
+{SOURCES_SUMMARY_SECTION}
+
 {DATA_AVAILABILITY_SECTION}
 
 Your job:
@@ -60,6 +63,7 @@ Your job:
    - "needs_clarification": the user might mean a data question but it is too vague to plan (set is_valid=false and add clarifying_questions).
 
 Rules:
+- If WAREHOUSE / SOURCES CONTEXT lists multiple connections, the user (or UI) has selected one **active** source for this question. Plan only for that source’s data; do not assume cross-database joins.
 - Only analytics questions about business data (sales, orders, products, customers, brands, campaigns, fulfillment, returns, reps) are valid when they map to the connected warehouse.
 - Use lowercase for metric/dimension names that could map to database columns.
 - For date filters, use keys like "start_date", "end_date" or "period" (e.g. "last_quarter").
@@ -222,7 +226,7 @@ def run_planner(state: dict) -> dict:
     )
 
     try:
-        schema = load_schema()
+        schema = get_effective_schema(state)
         data_ranges_str = extract_data_ranges(schema)
         data_section = (
             f"DATA AVAILABILITY (use this to validate time-based questions):\n{data_ranges_str}\n\n"
@@ -240,11 +244,19 @@ def run_planner(state: dict) -> dict:
         )
 
         history_section = _build_conversation_history_section(history)
+        src_summary = (state.get("available_sources_summary") or "").strip()
+        sources_block = (
+            f"WAREHOUSE / SOURCES CONTEXT:\n{src_summary}\n\n"
+            "Use only the **active** source above for this question. Do not merge data across sources.\n\n"
+            if src_summary
+            else ""
+        )
         llm = get_gemini()
         structured_llm = llm.with_structured_output(AnalysisPlan, method="json_mode")
         prompt = PLANNER_PROMPT.format(
             query=query,
             CONVERSATION_HISTORY_SECTION=history_section or "",
+            SOURCES_SUMMARY_SECTION=sources_block,
             DATA_AVAILABILITY_SECTION=data_section or "No date-range metadata available; skip time-range validation.",
         )
         append_trace(
@@ -267,12 +279,16 @@ def run_planner(state: dict) -> dict:
         _normalize_execution_steps(plan_dict)
 
         if plan_dict.get("is_valid"):
+            ds_label = (state.get("data_source_label") or "").strip()
+            plan_msg = "Plan created – query is valid and within data range"
+            if ds_label:
+                plan_msg = f"Plan created – using data source: {ds_label}"
             append_trace(
                 trace,
                 TraceEntry(
                     agent="planner",
                     status="success",
-                    message="Plan created – query is valid and within data range",
+                    message=plan_msg,
                     output={
                         "is_valid": True,
                         "metrics": plan_dict.get("metrics", []),

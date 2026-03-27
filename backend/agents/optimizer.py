@@ -12,7 +12,8 @@ from langgraph.types import interrupt
 
 from llm import get_gemini, invoke_with_retry
 from agents.state import TraceEntry
-from agents.schema_utils import load_schema, plan_result_limit_display, sql_row_limit_rule_5
+from agents.context import get_effective_connector, get_effective_schema
+from agents.schema_utils import plan_result_limit_display, sql_row_limit_rule_5
 from agents.trace_stream import append_trace
 
 
@@ -91,11 +92,7 @@ def run_optimizer_prepare(state: dict) -> dict:
         )
         return {"trace": trace}
 
-    try:
-        from db.factory import get_connector
-        connector = get_connector()
-    except ImportError:
-        connector = None
+    connector = get_effective_connector(state)
 
     if not connector:
         append_trace(
@@ -104,7 +101,7 @@ def run_optimizer_prepare(state: dict) -> dict:
         )
         return {"trace": trace}
 
-    schema = load_schema()
+    schema = get_effective_schema(state)
     schema_json = json.dumps(schema, indent=2)
     metrics = effective_plan.get("metrics", [])
     dimensions = effective_plan.get("dimensions", [])
@@ -115,8 +112,9 @@ def run_optimizer_prepare(state: dict) -> dict:
     try:
         llm = get_gemini()
         dialect = connector.dialect
+        hints = state.get("runtime_connection_hints") or {}
         if dialect == "postgres":
-            schema_name = os.getenv("POSTGRES_SCHEMA", "public")
+            schema_name = hints.get("postgres_schema") or os.getenv("POSTGRES_SCHEMA", "public")
             prompt = OPTIMIZER_PROMPT_POSTGRES.format(
                 metrics=metrics,
                 dimensions=dimensions,
@@ -127,8 +125,8 @@ def run_optimizer_prepare(state: dict) -> dict:
                 schema=schema_name,
             )
         else:
-            project_id = os.getenv("BIGQUERY_PROJECT_ID")
-            dataset_id = os.getenv("BIGQUERY_DATASET", "retail_data")
+            project_id = hints.get("bigquery_project") or os.getenv("BIGQUERY_PROJECT_ID")
+            dataset_id = hints.get("bigquery_dataset") or os.getenv("BIGQUERY_DATASET", "retail_data")
             prompt = OPTIMIZER_PROMPT_BIGQUERY.format(
                 metrics=metrics,
                 dimensions=dimensions,

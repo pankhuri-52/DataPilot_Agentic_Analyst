@@ -38,11 +38,38 @@ def _serialize(v: Any) -> Any:
 
 
 class PostgresConnector(DatabaseConnector):
-    """PostgreSQL database connector."""
+    """PostgreSQL database connector.
 
-    def __init__(self, connection_url: str, schema: str = "public"):
-        self.connection_url = connection_url
+    Prefer ``connect_kwargs`` (host, port, dbname, user, password) when passwords
+    contain ``@`` or other URI-reserved characters; URI strings are still supported
+    for env-based ``POSTGRES_URL`` and CSV uploads.
+    """
+
+    def __init__(
+        self,
+        connection_url: str | None = None,
+        schema: str = "public",
+        *,
+        connect_kwargs: dict[str, Any] | None = None,
+    ):
+        if connect_kwargs is not None:
+            self._connect_kwargs = dict(connect_kwargs)
+            if self._connect_kwargs.get("port") is not None:
+                self._connect_kwargs["port"] = int(self._connect_kwargs["port"])
+            self.connection_url = None
+        elif connection_url:
+            self.connection_url = connection_url
+            self._connect_kwargs = None
+        else:
+            raise ValueError("PostgresConnector requires connection_url or connect_kwargs")
         self.schema = schema
+
+    def _open_conn(self):
+        import psycopg2
+
+        if self._connect_kwargs is not None:
+            return psycopg2.connect(**self._connect_kwargs)
+        return psycopg2.connect(self.connection_url)
 
     @property
     def dialect(self) -> str:
@@ -51,7 +78,7 @@ class PostgresConnector(DatabaseConnector):
     def execute(self, sql: str) -> list[dict[str, Any]]:
         import psycopg2
         from psycopg2.extras import RealDictCursor
-        conn = psycopg2.connect(self.connection_url)
+        conn = self._open_conn()
         try:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute(sql)
@@ -67,7 +94,7 @@ class PostgresConnector(DatabaseConnector):
 
         import psycopg2
         from psycopg2.extras import RealDictCursor
-        conn = psycopg2.connect(self.connection_url)
+        conn = self._open_conn()
         all_ranges = []
 
         try:

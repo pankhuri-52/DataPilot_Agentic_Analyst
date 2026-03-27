@@ -68,6 +68,13 @@ class TraceEntry(BaseModel):
 class DataPilotState(TypedDict, total=False):
     """Shared state flowing through all agents. Values stored as dicts for LangGraph."""
     query: str
+    user_id: Optional[str]  # For resolving saved connectors (no secrets in state)
+    active_source_id: Optional[str]  # "primary" or user_data_sources.id
+    schema_catalog: Optional[dict[str, Any]]  # Introspected or static metadata for the active source
+    runtime_connection_hints: Optional[dict[str, Any]]  # postgres_schema, bigquery_project, bigquery_dataset
+    available_sources: Optional[list[dict[str, Any]]]  # Lightweight list for UI / planner context
+    available_sources_summary: Optional[str]  # Prompt text: connected sources + active
+    data_source_label: Optional[str]  # Human label for traces
     conversation_history: list[dict[str, Any]]  # [{role, content, metadata?}] for conversational context
     plan: Optional[dict[str, Any]]  # AnalysisPlan as dict
     data_feasibility: str  # "full" | "partial" | "none"

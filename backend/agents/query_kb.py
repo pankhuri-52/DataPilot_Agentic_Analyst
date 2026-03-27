@@ -14,7 +14,7 @@ from agents.query_kb_helpers import (
     resolve_kb_user_question_for_index,
     schema_fingerprint_from_schema,
 )
-from agents.schema_utils import load_schema
+from agents.context import get_effective_connector, get_effective_schema
 from agents.state import TraceEntry
 from agents.trace_stream import append_trace
 
@@ -55,12 +55,7 @@ def run_query_kb(state: dict) -> dict:
     if not match_query.strip():
         return {}
 
-    try:
-        from db.factory import get_connector
-
-        connector = get_connector()
-    except Exception:
-        connector = None
+    connector = get_effective_connector(state)
 
     if not connector:
         append_trace(
@@ -75,7 +70,7 @@ def run_query_kb(state: dict) -> dict:
 
     dialect = connector.dialect
     try:
-        schema = load_schema()
+        schema = get_effective_schema(state)
         fingerprint = schema_fingerprint_from_schema(schema)
     except Exception as e:
         logger.warning("query_kb: could not load schema: %s", e)

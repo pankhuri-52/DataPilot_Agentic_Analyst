@@ -54,10 +54,23 @@ def _serialize(v: Any) -> Any:
 class BigQueryConnector(DatabaseConnector):
     """BigQuery database connector."""
 
-    def __init__(self, project_id: str, dataset_id: str):
+    def __init__(self, project_id: str, dataset_id: str, credentials_info: dict | None = None):
         self.project_id = project_id
         self.dataset_id = dataset_id
+        self._credentials_info = credentials_info
+        if not credentials_info:
+            _resolve_credentials_path()
+
+    def _client(self):
+        from google.cloud import bigquery
+
+        if self._credentials_info:
+            from google.oauth2 import service_account
+
+            creds = service_account.Credentials.from_service_account_info(self._credentials_info)
+            return bigquery.Client(project=self.project_id, credentials=creds)
         _resolve_credentials_path()
+        return bigquery.Client(project=self.project_id)
 
     @property
     def dialect(self) -> str:
@@ -65,7 +78,8 @@ class BigQueryConnector(DatabaseConnector):
 
     def execute(self, sql: str) -> list[dict[str, Any]]:
         from google.cloud import bigquery
-        client = bigquery.Client(project=self.project_id)
+
+        client = self._client()
         query_job = client.query(sql)
         rows = list(query_job.result(max_results=1000))
         return [{k: _serialize(v) for k, v in dict(row).items()} for row in rows]
@@ -77,7 +91,8 @@ class BigQueryConnector(DatabaseConnector):
         BigQuery on-demand: ~$5 per TiB processed.
         """
         from google.cloud import bigquery
-        client = bigquery.Client(project=self.project_id)
+
+        client = self._client()
         job_config = bigquery.QueryJobConfig(dry_run=True, use_query_cache=False)
         query_job = client.query(sql, job_config=job_config)
         bytes_processed = query_job.total_bytes_processed or 0
@@ -91,7 +106,8 @@ class BigQueryConnector(DatabaseConnector):
             return None, "No date columns found in schema for diagnostic."
 
         from google.cloud import bigquery
-        client = bigquery.Client(project=self.project_id)
+
+        client = self._client()
         all_ranges = []
 
         for table_name, col_name in date_cols:

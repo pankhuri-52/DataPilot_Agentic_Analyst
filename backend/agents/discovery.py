@@ -6,7 +6,8 @@ import json
 
 from llm import get_gemini, invoke_with_retry
 from agents.state import DataFeasibility, TraceEntry
-from agents.schema_utils import load_schema, extract_data_ranges
+from agents.context import get_effective_schema
+from agents.schema_utils import extract_data_ranges
 from agents.trace_stream import append_trace
 
 
@@ -66,7 +67,7 @@ def run_discovery(state: dict) -> dict:
         )
         return {"data_feasibility": "none", "trace": trace}
 
-    schema = load_schema()
+    schema = get_effective_schema(state)
     schema_json = json.dumps(schema, indent=2)
     data_ranges = extract_data_ranges(schema)
     data_ranges_section = data_ranges

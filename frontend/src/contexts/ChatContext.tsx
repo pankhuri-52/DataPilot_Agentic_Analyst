@@ -17,6 +17,8 @@ import { API_BASE, fetchWithRetry } from "@/lib/httpClient";
 /** Messages when no Supabase conversation is selected (signed-out or new chat). */
 export const GUEST_MESSAGES_KEY = "__guest__";
 
+const ACTIVE_SOURCE_STORAGE_KEY = "datapilot_active_source_id";
+
 export function conversationMessagesKey(conversationId: string | null): string {
   return conversationId ?? GUEST_MESSAGES_KEY;
 }
@@ -83,6 +85,9 @@ interface ChatContextType {
   composerQuerySeed: { id: number; text: string } | null;
   requestComposerQuery: (text: string) => void;
   clearComposerQuerySeed: () => void;
+  /** `primary` (env warehouse) or a saved source UUID from GET /data-sources/status. */
+  selectedDataSourceId: string;
+  setSelectedDataSourceId: (id: string) => void;
 }
 
 const ChatContext = createContext<ChatContextType | undefined>(undefined);
@@ -97,6 +102,25 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     id: number;
     text: string;
   } | null>(null);
+  const [selectedDataSourceId, setSelectedDataSourceIdState] = useState<string>("primary");
+
+  useEffect(() => {
+    try {
+      const v = localStorage.getItem(ACTIVE_SOURCE_STORAGE_KEY);
+      if (v) setSelectedDataSourceIdState(v);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const setSelectedDataSourceId = useCallback((id: string) => {
+    setSelectedDataSourceIdState(id);
+    try {
+      localStorage.setItem(ACTIVE_SOURCE_STORAGE_KEY, id);
+    } catch {
+      /* ignore */
+    }
+  }, []);
 
   const messagesByConvRef = useRef(messagesByConv);
   messagesByConvRef.current = messagesByConv;
@@ -251,6 +275,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         composerQuerySeed,
         requestComposerQuery,
         clearComposerQuerySeed,
+        selectedDataSourceId,
+        setSelectedDataSourceId,
       }}
     >
       {children}

@@ -1,6 +1,7 @@
 # DataPilot backend – FastAPI
 fastapi>=0.109.0
 uvicorn[standard]>=0.27.0
+python-multipart>=0.0.9
 python-dotenv>=1.0.0
 
 # BigQuery (POC data & later agent queries)
@@ -18,3 +19,6 @@ supabase>=2.0.0
 
 # PostgreSQL (optional, for DATABASE_TYPE=postgres)
 psycopg2-binary>=2.9.0
+
+# Encrypted user data source configs
+cryptography>=42.0.0

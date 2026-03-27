@@ -119,8 +119,11 @@ export function DataPilotClient() {
     composerQuerySeed,
     clearComposerQuerySeed,
     requestComposerQuery,
+    selectedDataSourceId,
+    setSelectedDataSourceId,
   } = useChat();
   const [query, setQuery] = useState("");
+  const [sourceOptions, setSourceOptions] = useState<{ id: string; label: string }[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [suggestedQuestions, setSuggestedQuestions] = useState<string[]>([]);
@@ -160,6 +163,44 @@ export function DataPilotClient() {
     const id = requestAnimationFrame(() => queryInputRef.current?.focus());
     return () => cancelAnimationFrame(id);
   }, [composerQuerySeed, clearComposerQuerySeed]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const headers: Record<string, string> = {};
+        const token = getAccessToken();
+        if (token) headers.Authorization = `Bearer ${token}`;
+        const res = await fetchWithRetry(
+          `${API_BASE}/data-sources/status`,
+          { headers },
+          { logLabel: "GET /data-sources/status (chat)" }
+        );
+        if (!res.ok || cancelled) return;
+        const data = (await res.json()) as {
+          sources?: { id: string; label: string }[];
+        };
+        const opts = (data.sources ?? []).map((s) => ({
+          id: s.id,
+          label: s.label || s.id,
+        }));
+        setSourceOptions(opts);
+      } catch {
+        if (!cancelled) setSourceOptions([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [user, getAccessToken]);
+
+  useEffect(() => {
+    if (sourceOptions.length === 0) return;
+    const ids = new Set(sourceOptions.map((o) => o.id));
+    if (!ids.has(selectedDataSourceId)) {
+      setSelectedDataSourceId(sourceOptions[0].id);
+    }
+  }, [sourceOptions, selectedDataSourceId, setSelectedDataSourceId]);
 
   useEffect(() => {
     if (!user) {
@@ -253,6 +294,7 @@ export function DataPilotClient() {
       thread_id: threadId,
       conversation_id: continueConvId,
       original_query: precedingUserContent(convKey, assistantMessageId) || undefined,
+      source_id: selectedDataSourceId,
     };
     if (typeof opts === "object" && opts !== null && "queryCache" in opts) {
       continueBody.resume = {
@@ -524,6 +566,7 @@ export function DataPilotClient() {
           body: JSON.stringify({
             query: text,
             conversation_id: streamConversationId || undefined,
+            source_id: selectedDataSourceId,
           }),
         },
         { logLabel: "POST /ask/stream" }
@@ -1266,7 +1309,27 @@ export function DataPilotClient() {
       </div>
 
       <div className="fixed bottom-0 left-[var(--sidebar-width)] right-0 z-40 border-border bg-background/95 px-4 py-3 sm:px-6 sm:py-3.5 backdrop-blur transition-[left] duration-200 ease-out supports-[backdrop-filter]:bg-background/80">
-        <div className="mx-auto max-w-4xl">
+        <div className="mx-auto max-w-4xl space-y-2">
+          {sourceOptions.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2 px-1 text-[12px] text-muted-foreground">
+              <label htmlFor="datapilot-source" className="font-medium text-foreground/80">
+                Data source
+              </label>
+              <select
+                id="datapilot-source"
+                value={selectedDataSourceId}
+                onChange={(e) => setSelectedDataSourceId(e.target.value)}
+                disabled={loading}
+                className="max-w-[min(100%,28rem)] cursor-pointer rounded-md border border-border bg-background px-2 py-1.5 text-[13px] text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+              >
+                {sourceOptions.map((o) => (
+                  <option key={o.id} value={o.id}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
           <form
             onSubmit={handleSubmit}
             className="flex gap-2 rounded-2xl border border-border/80 bg-muted/40 p-2.5 shadow-sm transition-colors focus-within:border-primary/50 focus-within:ring-2 focus-within:ring-primary/20"

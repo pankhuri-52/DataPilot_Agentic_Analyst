@@ -7,20 +7,28 @@ import logging
 import os
 import uuid
 from datetime import datetime, timezone
-from fastapi import FastAPI, HTTPException, Body, Depends, Header, Query
+from fastapi import FastAPI, HTTPException, Body, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
-# Load .env from project root (parent of backend/) if present
+# Load .env: project root first, then backend/.env for keys not already set (common when .env lives only under backend/)
 from pathlib import Path
 _backend_dir = Path(__file__).resolve().parent
 _project_root = _backend_dir.parent
-_env = _project_root / ".env"
-if _env.exists():
+try:
     from dotenv import load_dotenv
-    load_dotenv(_env)
+except ImportError:
+    load_dotenv = None  # type: ignore[assignment,misc]
+if load_dotenv:
+    _root_env = _project_root / ".env"
+    if _root_env.exists():
+        load_dotenv(_root_env)
+    _backend_env = _backend_dir / ".env"
+    if _backend_env.exists():
+        load_dotenv(_backend_env, override=False)
 
 from core.logging_config import setup_logging
+from api_deps import get_current_user_optional, require_user as _require_user
 
 setup_logging()
 
@@ -77,6 +85,10 @@ app = FastAPI(
     version="0.1.0",
 )
 
+from data_sources.router import router as data_sources_router
+
+app.include_router(data_sources_router)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_allow_origins(),
@@ -108,23 +120,6 @@ def root():
 
 
 # ---- Auth ----
-def _get_bearer_token(authorization: str | None = Header(default=None)) -> str | None:
-    """Extract Bearer token from Authorization header."""
-    if not authorization or not authorization.startswith("Bearer "):
-        return None
-    return authorization[7:].strip()
-
-
-def get_current_user_optional(authorization: str | None = Header(default=None)):
-    """Return current user if valid JWT present, else None."""
-    token = _get_bearer_token(authorization)
-    if not token:
-        return None
-    from supabase_service import get_user_from_token
-
-    return get_user_from_token(token)
-
-
 @app.post("/auth/signup")
 def auth_signup(body: dict = Body(default={"email": "", "password": "", "name": ""})):
     """Create a new user. Returns user and access_token."""
@@ -264,14 +259,6 @@ def _chat_error_detail(exc: BaseException) -> str:
             f"{raw} — Run backend/supabase_migrations/migrations/001_conversations.sql in the Supabase SQL Editor."
         )
     return raw
-
-
-def _require_user(authorization: str | None = Header(default=None)):
-    """Dependency that requires authenticated user."""
-    user = get_current_user_optional(authorization)
-    if user is None:
-        raise HTTPException(status_code=401, detail="Authentication required")
-    return user
 
 
 @app.get("/conversations")
@@ -418,54 +405,79 @@ def get_schema():
 
 
 @app.get("/data-sources/status")
-def data_sources_status():
+def data_sources_status(user=Depends(get_current_user_optional)):
     """
-    Env-driven primary warehouse connector status (read-only).
-    Used by the UI to show real configuration vs mock data.
+    Env primary warehouse + signed-in user's saved sources (from Supabase user_data_sources).
     """
+    sources: list[dict] = []
+    hint: str | None = None
     try:
         from db.factory import get_connector
     except ImportError:
         return {"configured": False, "sources": [], "hint": "db.factory not available"}
 
-    conn = get_connector()
-    if conn is None:
+    try:
+        conn = get_connector()
+        if conn is not None:
+            src: dict = {
+                "id": "primary",
+                "type": conn.dialect,
+                "healthy": False,
+                "label": "",
+                "detail": None,
+            }
+            if conn.dialect == "bigquery":
+                src["label"] = f"BigQuery · {conn.project_id} / {conn.dataset_id}"
+                try:
+                    _resolve_credentials_path()
+                    from google.cloud import bigquery
+
+                    client = bigquery.Client(project=conn.project_id)
+                    ds = f"{conn.project_id}.{conn.dataset_id}"
+                    client.get_dataset(ds)
+                    src["healthy"] = True
+                except Exception as e:
+                    src["detail"] = str(e)
+            else:
+                schema_name = getattr(conn, "schema", "public")
+                src["label"] = f"PostgreSQL · {schema_name} (env)"
+                try:
+                    conn.execute("SELECT 1")
+                    src["healthy"] = True
+                except Exception as e:
+                    src["detail"] = str(e)
+            sources.append(src)
+    except Exception:
+        logger.debug("primary connector status", exc_info=True)
+
+    if user:
+        try:
+            from data_sources.service import list_sources
+
+            for row in list_sources(user["id"]):
+                sources.append(
+                    {
+                        "id": str(row["id"]),
+                        "type": row.get("source_type"),
+                        "healthy": bool(row.get("healthy")),
+                        "label": row.get("label") or row.get("source_type"),
+                        "detail": row.get("last_error"),
+                    }
+                )
+        except Exception:
+            logger.debug("list_sources for status failed", exc_info=True)
+
+    if not sources:
         return {
             "configured": False,
             "sources": [],
-            "hint": "Set BIGQUERY_PROJECT_ID and BIGQUERY_DATASET, or DATABASE_TYPE=postgres with POSTGRES_URL",
+            "hint": (
+                "Set BIGQUERY_PROJECT_ID and BIGQUERY_DATASET, or DATABASE_TYPE=postgres with POSTGRES_URL. "
+                "Sign in and add a saved source under Data Sources."
+            ),
         }
 
-    src: dict = {
-        "id": "primary",
-        "type": conn.dialect,
-        "healthy": False,
-        "label": "",
-        "detail": None,
-    }
-
-    if conn.dialect == "bigquery":
-        src["label"] = f"BigQuery · {conn.project_id} / {conn.dataset_id}"
-        try:
-            _resolve_credentials_path()
-            from google.cloud import bigquery
-
-            client = bigquery.Client(project=conn.project_id)
-            ds = f"{conn.project_id}.{conn.dataset_id}"
-            client.get_dataset(ds)
-            src["healthy"] = True
-        except Exception as e:
-            src["detail"] = str(e)
-    else:
-        schema_name = getattr(conn, "schema", "public")
-        src["label"] = f"PostgreSQL · {schema_name}"
-        try:
-            conn.execute("SELECT 1")
-            src["healthy"] = True
-        except Exception as e:
-            src["detail"] = str(e)
-
-    return {"configured": True, "sources": [src]}
+    return {"configured": True, "sources": sources, "hint": hint}
 
 
 def _get_conversation_history(user_id: str, conversation_id: str | None) -> list[dict]:
@@ -650,16 +662,15 @@ def _maybe_index_query_kb(last_state: dict, user_query: str) -> None:
             result_preview_payload,
             schema_fingerprint_from_schema,
         )
-        from agents.schema_utils import load_schema
-        from db.factory import get_connector
+        from agents.context import get_effective_connector, get_effective_schema
         from embeddings import embed_text
         from query_kb_store import insert_kb_entry
 
-        connector = get_connector()
+        connector = get_effective_connector(last_state)
         if not connector:
             return
         dialect = connector.dialect
-        schema = load_schema()
+        schema = get_effective_schema(last_state)
         fingerprint = schema_fingerprint_from_schema(schema)
         hist = last_state.get("conversation_history") or []
         if not isinstance(hist, list):
@@ -741,6 +752,7 @@ def ask(
     query = (body or {}).get("query", "").strip()
     conversation_id = (body or {}).get("conversation_id")
     thread_id = (body or {}).get("thread_id") or str(uuid.uuid4())
+    source_id = (body or {}).get("source_id")
     if not query:
         raise HTTPException(status_code=400, detail="query is required")
 
@@ -749,10 +761,12 @@ def ask(
     try:
         from langgraph.types import Command
         from agents.graph import get_graph
+        from data_sources.runtime import build_initial_runtime_state
 
         graph = get_graph()
         config = {"configurable": {"thread_id": thread_id}}
-        initial_state = {"query": query, "trace": [], "conversation_history": history}
+        rt = build_initial_runtime_state(user["id"] if user else None, source_id)
+        initial_state = {"query": query, "trace": [], "conversation_history": history, **rt}
 
         try:
             result = graph.invoke(initial_state, config=config)
@@ -834,6 +848,7 @@ async def _ask_stream_generator(
     conversation_history: list[dict] | None = None,
     resume: bool | dict | None = None,
     persist_query: str | None = None,
+    source_id: str | None = None,
 ):
     """Async generator that yields SSE events for real-time agent progress. Handles interrupts."""
     try:
@@ -858,7 +873,10 @@ async def _ask_stream_generator(
             except Exception:
                 prev_trace_len = 0
         else:
-            input_data = {"query": query, "trace": [], "conversation_history": history}
+            from data_sources.runtime import build_initial_runtime_state
+
+            rt = build_initial_runtime_state(user["id"] if user else None, source_id)
+            input_data = {"query": query, "trace": [], "conversation_history": history, **rt}
 
         # stream_mode includes "custom" so append_trace() can use get_stream_writer (used by LangGraph).
         # Do not yield SSE from custom "trace_progress" here: the next "values" chunk already contains
@@ -976,6 +994,7 @@ async def ask_stream(
     query = (body or {}).get("query", "").strip()
     conversation_id = (body or {}).get("conversation_id")
     thread_id = (body or {}).get("thread_id") or str(uuid.uuid4())
+    source_id = (body or {}).get("source_id")
     if not query:
         raise HTTPException(status_code=400, detail="query is required")
 
@@ -983,7 +1002,14 @@ async def ask_stream(
 
     try:
         return StreamingResponse(
-            _ask_stream_generator(query, user, conversation_id, thread_id, conversation_history=history),
+            _ask_stream_generator(
+                query,
+                user,
+                conversation_id,
+                thread_id,
+                conversation_history=history,
+                source_id=source_id,
+            ),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
@@ -1007,6 +1033,7 @@ async def ask_continue(
     """
     thread_id = (body or {}).get("thread_id", "").strip()
     conversation_id = (body or {}).get("conversation_id")
+    source_id = (body or {}).get("source_id")
     resume_payload = (body or {}).get("resume")
     if resume_payload is not None:
         resume_val: bool | dict = resume_payload
@@ -1028,6 +1055,7 @@ async def ask_continue(
                 conversation_history=history,
                 resume=resume_val,
                 persist_query=original_query or None,
+                source_id=source_id,
             ),
             media_type="text/event-stream",
             headers={

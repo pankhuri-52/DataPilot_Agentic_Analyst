@@ -239,7 +239,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     >
       <div
         className={cn(
-          "fixed left-0 right-0 top-0 z-[45] grid min-h-[var(--app-chrome-header-h)] items-stretch",
+          "fixed left-0 right-0 top-0 z-[60] grid min-h-[var(--app-chrome-header-h)] items-stretch",
           appTopHeaderStripClass
         )}
         style={{

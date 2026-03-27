@@ -7,7 +7,8 @@ import json
 import re
 from llm import get_gemini, invoke_with_retry
 from agents.state import TraceEntry
-from agents.schema_utils import load_schema, plan_result_limit_display, sql_row_limit_rule_5
+from agents.context import get_effective_connector, get_effective_schema
+from agents.schema_utils import plan_result_limit_display, sql_row_limit_rule_5
 from agents.trace_stream import append_trace
 
 
@@ -104,16 +105,16 @@ def run_executor(state: dict) -> dict:
         )
         return {"trace": trace}
 
+    ds = (state.get("data_source_label") or "").strip()
+    conn_msg = "Connecting to database..."
+    if ds:
+        conn_msg = f"Connecting to database ({ds})..."
     append_trace(
         trace,
-        TraceEntry(agent="executor", status="info", message="Connecting to database...").model_dump()
+        TraceEntry(agent="executor", status="info", message=conn_msg).model_dump()
     )
 
-    try:
-        from db.factory import get_connector
-        connector = get_connector()
-    except ImportError:
-        connector = None
+    connector = get_effective_connector(state)
 
     if not connector:
         append_trace(
@@ -132,9 +133,10 @@ def run_executor(state: dict) -> dict:
             trace,
             TraceEntry(agent="executor", status="info", message="Generating SQL from analysis plan...").model_dump(),
         )
-        project_id = os.getenv("BIGQUERY_PROJECT_ID")
-        dataset_id = os.getenv("BIGQUERY_DATASET", "retail_data")
-        schema = load_schema()
+        hints = state.get("runtime_connection_hints") or {}
+        project_id = hints.get("bigquery_project") or os.getenv("BIGQUERY_PROJECT_ID")
+        dataset_id = hints.get("bigquery_dataset") or os.getenv("BIGQUERY_DATASET", "retail_data")
+        schema = get_effective_schema(state)
         schema_json = json.dumps(schema, indent=2)
         metrics = effective_plan.get("metrics", [])
         dimensions = effective_plan.get("dimensions", [])
@@ -145,7 +147,7 @@ def run_executor(state: dict) -> dict:
         llm = get_gemini()
         dialect = connector.dialect
         if dialect == "postgres":
-            schema_name = os.getenv("POSTGRES_SCHEMA", "public")
+            schema_name = hints.get("postgres_schema") or os.getenv("POSTGRES_SCHEMA", "public")
             prompt = EXECUTOR_PROMPT_POSTGRES.format(
                 metrics=metrics,
                 dimensions=dimensions,
@@ -182,7 +184,7 @@ def run_executor(state: dict) -> dict:
             trace,
             TraceEntry(agent="executor", status="info", message=f"Using SQL from {src}...").model_dump(),
         )
-        schema = load_schema()
+        schema = get_effective_schema(state)
 
     try:
         if FORBIDDEN_SQL_PATTERNS.search(sql):
@@ -198,7 +200,7 @@ def run_executor(state: dict) -> dict:
         )
 
         if connector.dialect == "bigquery" and _KB_BQ_PROJECT_PLACEHOLDER in sql:
-            project_id = (os.getenv("BIGQUERY_PROJECT_ID") or "").strip()
+            project_id = (getattr(connector, "project_id", None) or os.getenv("BIGQUERY_PROJECT_ID") or "").strip()
             if not project_id or project_id == "your-gcp-project-id":
                 append_trace(
                     trace,
