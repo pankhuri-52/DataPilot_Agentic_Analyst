@@ -1,0 +1,11 @@
+region,month,target_revenue_usd,channel,notes
+North,2025-01,1250000,All channels,Regional spreadsheet — ops
+North,2025-02,1180000,All channels,
+South,2025-01,980000,All channels,
+South,2025-02,1025000,All channels,Adjusted after Q4 review
+East,2025-01,1100000,Retail + online,
+East,2025-02,1150000,Retail + online,
+West,2025-01,890000,All channels,
+West,2025-02,920000,All channels,
+North,2025-03,1300000,All channels,Q1 stretch goal
+South,2025-03,1050000,All channels,

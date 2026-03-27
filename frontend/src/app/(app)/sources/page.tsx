@@ -140,8 +140,48 @@ function badgeForState(state: ConnectorUiState): { label: string; className: str
   }
 }
 
+/** Module-level modal so React does not remount the portal on every parent re-render (fixes CSV context textarea losing focus). */
+function DataSourceModalChrome({
+  title,
+  children,
+  onClose,
+}: {
+  title: string;
+  children: ReactNode;
+  onClose: () => void;
+}) {
+  return createPortal(
+    <div
+      className="fixed inset-x-0 bottom-0 top-[var(--app-chrome-header-h)] z-[70] flex items-center justify-center bg-black/50 p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="ds-modal-title"
+    >
+      <Card className="relative z-10 max-h-[90vh] w-full max-w-lg overflow-y-auto shadow-lg">
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="absolute right-2 top-2 z-10 size-8"
+          onClick={onClose}
+          aria-label="Close"
+        >
+          <X className="size-4" />
+        </Button>
+        <CardHeader className="pr-10">
+          <CardTitle id="ds-modal-title" className="font-display text-[15px] font-semibold tracking-tight">
+            {title}
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4 text-[13px]">{children}</CardContent>
+      </Card>
+    </div>,
+    document.body
+  );
+}
+
 export default function SourcesPage() {
-  const { user, getAccessToken } = useAuth();
+  const { user, getAccessToken, refreshAccessToken } = useAuth();
   const { setSelectedDataSourceId } = useChat();
   const [status, setStatus] = useState<StatusResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -158,6 +198,7 @@ export default function SourcesPage() {
   const [bqDataset, setBqDataset] = useState("");
   const [bqSaJson, setBqSaJson] = useState("");
   const [csvLabel, setCsvLabel] = useState("");
+  const [csvImportContext, setCsvImportContext] = useState("");
   const csvRef = useRef<HTMLInputElement>(null);
 
   const loadStatus = async () => {
@@ -327,24 +368,58 @@ export default function SourcesPage() {
     setConnectBusy(true);
     setConnectMsg(null);
     try {
-      const fd = new FormData();
-      fd.append("file", file);
-      const token = getAccessToken();
-      const headers: Record<string, string> = {};
-      if (token) headers.Authorization = `Bearer ${token}`;
-      const res = await fetchWithRetry(
-        `${API_BASE}/data-sources/upload-csv?label=${encodeURIComponent(csvLabel.trim() || file.name)}`,
-        { method: "POST", headers, body: fd },
-        { logLabel: "POST /data-sources/upload-csv" }
-      );
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        setConnectMsg(typeof data.detail === "string" ? data.detail : "Upload failed");
+      const buildFormData = () => {
+        const fd = new FormData();
+        fd.append("file", file);
+        fd.append("label", csvLabel.trim() || file.name);
+        fd.append("import_context", csvImportContext.trim());
+        return fd;
+      };
+
+      let token = getAccessToken();
+      if (!token) {
+        token = await refreshAccessToken();
+      }
+      if (!token) {
+        setConnectMsg("Restoring your session… try again in a moment, or sign out and sign back in.");
         return;
       }
-      setConnectMsg("Uploaded.");
+
+      const postUpload = (accessToken: string) =>
+        fetchWithRetry(
+          `${API_BASE}/data-sources/upload-csv`,
+          {
+            method: "POST",
+            headers: { Authorization: `Bearer ${accessToken}` },
+            body: buildFormData(),
+          },
+          { logLabel: "POST /data-sources/upload-csv", retriableStatuses: [] }
+        );
+
+      let res = await postUpload(token);
+      if (res.status === 401) {
+        const t2 = await refreshAccessToken();
+        if (t2) {
+          res = await postUpload(t2);
+        }
+      }
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const detail = typeof data.detail === "string" ? data.detail : "Upload failed";
+        setConnectMsg(
+          res.status === 401
+            ? "Session expired and could not be renewed. Please sign out and sign in again."
+            : detail
+        );
+        return;
+      }
+      setConnectMsg(
+        "Uploaded. In chat, choose this source in the data source dropdown, then ask about the spreadsheet (e.g. total target revenue by region)."
+      );
       setSelectedDataSourceId(String(data.id));
       setModal(null);
+      setCsvImportContext("");
       if (csvRef.current) csvRef.current.value = "";
       await loadStatus();
     } catch (e) {
@@ -356,44 +431,6 @@ export default function SourcesPage() {
 
   const sources = status?.sources ?? [];
   const hint = status?.hint;
-
-  const ModalChrome = ({
-    title,
-    children,
-    onClose,
-  }: {
-    title: string;
-    children: ReactNode;
-    onClose: () => void;
-  }) =>
-    createPortal(
-      <div
-        className="fixed inset-x-0 bottom-0 top-[var(--app-chrome-header-h)] z-50 flex items-center justify-center bg-black/50 p-4"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="ds-modal-title"
-      >
-        <Card className="relative max-h-[90vh] w-full max-w-lg overflow-y-auto shadow-lg">
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="absolute right-2 top-2 size-8"
-            onClick={onClose}
-            aria-label="Close"
-          >
-            <X className="size-4" />
-          </Button>
-          <CardHeader className="pr-10">
-            <CardTitle id="ds-modal-title" className="font-display text-[15px] font-semibold tracking-tight">
-              {title}
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4 text-[13px]">{children}</CardContent>
-        </Card>
-      </div>,
-      document.body
-    );
 
   return (
     <AppPageShell
@@ -571,7 +608,7 @@ export default function SourcesPage() {
       )}
 
       {modal === "postgres" && (
-        <ModalChrome title="PostgreSQL (demo)" onClose={closePostgresModal}>
+        <DataSourceModalChrome title="PostgreSQL (demo)" onClose={closePostgresModal}>
           <p className="text-muted-foreground">
             Demo mode: fields are shown read-only. In production, analysts would edit host, database, and
             credentials and save multiple connections.
@@ -621,11 +658,11 @@ export default function SourcesPage() {
               {connectBusy ? <Loader2 className="size-4 animate-spin" /> : "Connect"}
             </Button>
           </div>
-        </ModalChrome>
+        </DataSourceModalChrome>
       )}
 
       {modal === "bigquery" && (
-        <ModalChrome title="Google BigQuery" onClose={() => setModal(null)}>
+        <DataSourceModalChrome title="Google BigQuery" onClose={() => setModal(null)}>
           <p className="text-muted-foreground">
             Paste a service account JSON key with access to the dataset. Stored encrypted server-side.
           </p>
@@ -657,19 +694,45 @@ export default function SourcesPage() {
               {connectBusy ? <Loader2 className="size-4 animate-spin" /> : "Connect"}
             </Button>
           </div>
-        </ModalChrome>
+        </DataSourceModalChrome>
       )}
 
       {modal === "csv" && (
-        <ModalChrome title="Upload CSV" onClose={() => setModal(null)}>
+        <DataSourceModalChrome title="Upload CSV" onClose={() => setModal(null)}>
           <p className="text-muted-foreground">
-            Loads into schema <code className="text-[11px]">user_uploads</code> (configurable via{" "}
-            <code className="text-[11px]">CSV_UPLOAD_SCHEMA</code>). Set{" "}
-            <code className="text-[11px]">SUPABASE_POSTGRES_URL</code> on the API.
+            Uploads go to Supabase Postgres (schema <code className="text-[11px]">user_uploads</code> by default). Copy a
+            Postgres URI from Supabase via the Connect button on the project home, or from the Database section in the
+            main left sidebar (the cylinder icon — not the gear Project Settings). Set{" "}
+            <code className="text-[11px]">SUPABASE_POSTGRES_URL</code> in the API <code className="text-[11px]">.env</code>{" "}
+            and restart the backend. On Windows, if a direct URI fails, use the session pooler URI (port 5432). If your
+            database password contains <code className="text-[11px]">@</code>, put{" "}
+            <code className="text-[11px]">%40</code> in the URL instead (same for <code className="text-[11px]">:</code> →{" "}
+            <code className="text-[11px]">%3A</code>). Then pick this source in chat to query it.
+          </p>
+          <p className="text-[13px] text-muted-foreground">
+            Example — monthly sales targets by region:{" "}
+            <a
+              className="font-medium text-foreground underline underline-offset-2 hover:text-foreground/90"
+              href="/samples/store_targets.csv"
+              download="store_targets.csv"
+            >
+              Download store_targets.csv
+            </a>
           </p>
           <div className="space-y-2">
             <label className="font-medium">Label (optional)</label>
-            <Input value={csvLabel} onChange={(e) => setCsvLabel(e.target.value)} placeholder="My spreadsheet" />
+            <Input
+              value={csvLabel}
+              onChange={(e) => setCsvLabel(e.target.value)}
+              placeholder="Store targets 2025"
+            />
+            <label className="font-medium">What this file is (helps the assistant)</label>
+            <textarea
+              className="min-h-[88px] w-full rounded-md border border-input bg-background px-3 py-2 text-[13px] leading-snug"
+              value={csvImportContext}
+              onChange={(e) => setCsvImportContext(e.target.value)}
+              placeholder='e.g. "Someone put monthly revenue targets by sales region in a spreadsheet. month is YYYY-MM; target_revenue_usd is USD."'
+            />
             <Input ref={csvRef} type="file" accept=".csv,text/csv" className="cursor-pointer text-[12px]" />
           </div>
           {connectMsg && <p className="text-sm text-muted-foreground">{connectMsg}</p>}
@@ -681,7 +744,7 @@ export default function SourcesPage() {
               {connectBusy ? <Loader2 className="size-4 animate-spin" /> : "Upload"}
             </Button>
           </div>
-        </ModalChrome>
+        </DataSourceModalChrome>
       )}
     </AppPageShell>
   );

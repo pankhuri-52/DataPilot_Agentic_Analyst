@@ -28,6 +28,8 @@ interface AuthContextType {
   signUp: (email: string, password: string, name?: string) => Promise<SignUpResult>;
   signOut: () => void;
   getAccessToken: () => string | null;
+  /** Exchange refresh_token for a new access_token; updates localStorage and user. */
+  refreshAccessToken: () => Promise<string | null>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -78,6 +80,38 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     },
     []
   );
+
+  const refreshAccessToken = useCallback(async (): Promise<string | null> => {
+    if (typeof window === "undefined") return null;
+    const refreshToken = localStorage.getItem(REFRESH_KEY);
+    if (!refreshToken) return null;
+    try {
+      const refreshRes = await fetchWithRetry(
+        `${API_BASE}/auth/refresh`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ refresh_token: refreshToken }),
+        },
+        { logLabel: "POST /auth/refresh (refreshAccessToken)", retriableStatuses: [] }
+      );
+      const refreshData = await refreshRes.json().catch(() => ({}));
+      if (!refreshRes.ok || !refreshData.access_token || !refreshData.user) {
+        if (refreshRes.status === 401 || refreshRes.status === 403) {
+          clearSession();
+        }
+        return null;
+      }
+      persistSession(
+        refreshData.access_token,
+        refreshData.refresh_token ?? refreshToken,
+        refreshData.user as User
+      );
+      return refreshData.access_token as string;
+    } catch {
+      return null;
+    }
+  }, [clearSession, persistSession]);
 
   const loadUser = useCallback(async () => {
     const token = getAccessToken();
@@ -210,7 +244,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   return (
     <AuthContext.Provider
-      value={{ user, loading, signIn, signUp, signOut, getAccessToken }}
+      value={{ user, loading, signIn, signUp, signOut, getAccessToken, refreshAccessToken }}
     >
       {children}
     </AuthContext.Provider>

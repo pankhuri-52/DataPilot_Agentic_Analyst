@@ -5,6 +5,7 @@ from decimal import Decimal
 from datetime import date, datetime
 from typing import Any
 
+from core.postgres_dsn import sanitize_postgres_uri_for_psycopg2
 from db.connector import DatabaseConnector
 
 
@@ -58,7 +59,7 @@ class PostgresConnector(DatabaseConnector):
                 self._connect_kwargs["port"] = int(self._connect_kwargs["port"])
             self.connection_url = None
         elif connection_url:
-            self.connection_url = connection_url
+            self.connection_url = sanitize_postgres_uri_for_psycopg2(connection_url)
             self._connect_kwargs = None
         else:
             raise ValueError("PostgresConnector requires connection_url or connect_kwargs")

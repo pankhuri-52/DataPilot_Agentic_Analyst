@@ -2,7 +2,14 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import { cn } from "@/lib/utils";
 import { appTopHeaderStripClass } from "@/lib/appTopHeaderClasses";
 import {
@@ -158,6 +165,24 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   const { user, loading, signOut } = useAuth();
   const { mainHeader } = useAppMainHeader();
+  const appChromeHeaderRef = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    const el = appChromeHeaderRef.current;
+    if (!el) return;
+    const root = document.documentElement;
+    const sync = () => {
+      const h = el.getBoundingClientRect().height;
+      root.style.setProperty("--app-chrome-header-h", `${Math.round(h)}px`);
+    };
+    sync();
+    const ro = new ResizeObserver(sync);
+    ro.observe(el);
+    return () => {
+      ro.disconnect();
+      root.style.removeProperty("--app-chrome-header-h");
+    };
+  }, []);
   const {
     startNewChat,
     conversations,
@@ -238,8 +263,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       }
     >
       <div
+        ref={appChromeHeaderRef}
         className={cn(
-          "fixed left-0 right-0 top-0 z-[60] grid min-h-[var(--app-chrome-header-h)] items-stretch",
+          "fixed left-0 right-0 top-0 z-[60] grid items-stretch",
           appTopHeaderStripClass
         )}
         style={{
@@ -248,7 +274,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       >
         <div
           className={cn(
-            "flex min-h-[var(--app-chrome-header-h)] min-w-0 border-r [border-right-color:var(--app-header-strip-border)]",
+            "flex min-w-0 border-r [border-right-color:var(--app-header-strip-border)]",
             sidebarCollapsed
               ? "items-center justify-center px-2 py-2.5"
               : "items-start gap-3 px-3.5 py-2.5"
@@ -287,7 +313,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             )}
           </Button>
         </div>
-        <div className="flex min-h-[var(--app-chrome-header-h)] min-w-0 items-start justify-between gap-3 px-3 py-2.5 sm:px-6">
+        <div className="flex min-w-0 items-start justify-between gap-3 px-3 py-2.5 sm:px-6">
           <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-1">
             {mainHeader ? (
               <>

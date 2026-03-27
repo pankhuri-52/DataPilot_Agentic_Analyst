@@ -42,6 +42,8 @@ User question: {query}
 
 {SOURCES_SUMMARY_SECTION}
 
+{IMPORT_CONTEXT_SECTION}
+
 {DATA_AVAILABILITY_SECTION}
 
 Your job:
@@ -64,7 +66,7 @@ Your job:
 
 Rules:
 - If WAREHOUSE / SOURCES CONTEXT lists multiple connections, the user (or UI) has selected one **active** source for this question. Plan only for that source’s data; do not assume cross-database joins.
-- Only analytics questions about business data (sales, orders, products, customers, brands, campaigns, fulfillment, returns, reps) are valid when they map to the connected warehouse.
+- Only analytics questions about business data (sales, orders, products, customers, brands, campaigns, fulfillment, returns, reps) are valid when they map to the connected warehouse — **unless** USER-UPLOADED SPREADSHEET rules appear below; then follow those for validity.
 - Use lowercase for metric/dimension names that could map to database columns.
 - For date filters, use keys like "start_date", "end_date" or "period" (e.g. "last_quarter").
 - Keep clarifying questions concise and actionable.
@@ -251,12 +253,29 @@ def run_planner(state: dict) -> dict:
             if src_summary
             else ""
         )
+        import_blocks: list[str] = []
+        if (schema.get("source_kind") or "").strip().lower() == "user_csv":
+            import_blocks.append(
+                "USER-UPLOADED SPREADSHEET:\n"
+                "- The active source is a CSV the user imported into the database as one table.\n"
+                "- Questions that filter, aggregate, sort, count, or describe that table’s rows/columns are valid "
+                "(query_scope=data_question). Retail topics are not required unless the user asked about them.\n"
+                "- Numeric values may be stored as TEXT; downstream SQL may need casts for sums or averages.\n"
+            )
+        ic = (schema.get("import_context") or "").strip()
+        if ic:
+            import_blocks.append(f"IMPORT CONTEXT (user notes about this file):\n{ic}")
+        import_context_section = "\n".join(import_blocks).strip()
+        if import_context_section:
+            import_context_section += "\n\n"
+
         llm = get_gemini()
         structured_llm = llm.with_structured_output(AnalysisPlan, method="json_mode")
         prompt = PLANNER_PROMPT.format(
             query=query,
             CONVERSATION_HISTORY_SECTION=history_section or "",
             SOURCES_SUMMARY_SECTION=sources_block,
+            IMPORT_CONTEXT_SECTION=import_context_section,
             DATA_AVAILABILITY_SECTION=data_section or "No date-range metadata available; skip time-range validation.",
         )
         append_trace(

@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from fastapi import APIRouter, Body, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, UploadFile
 
 from api_deps import require_user
 
@@ -150,23 +150,37 @@ def connect_bigquery(body: dict = Body(default_factory=dict), user=Depends(requi
         raise HTTPException(status_code=503, detail=str(e)) from e
 
 
+_MAX_IMPORT_CONTEXT_LEN = 4000
+
+
 @router.post("/upload-csv")
 async def upload_csv(
     user=Depends(require_user),
     file: UploadFile = File(...),
-    label: str = Query(""),
+    label: str = Form(""),
+    import_context: str = Form(""),
 ):
     pg_url = (os.getenv("SUPABASE_POSTGRES_URL") or "").strip()
     if not pg_url:
         raise HTTPException(
             status_code=503,
-            detail="Set SUPABASE_POSTGRES_URL to your Supabase direct Postgres connection string (Settings → Database).",
+            detail=(
+                "Set SUPABASE_POSTGRES_URL to your Postgres URI. In Supabase: open the project → click "
+                "Connect (top) → copy the URI (use Session pooler / port 5432 on Windows if direct connection fails). "
+                "Or: left sidebar Database → Connection string. Paste into backend .env and restart the API."
+            ),
         )
     upload_schema = (os.getenv("CSV_UPLOAD_SCHEMA") or "user_uploads").strip()
     raw = await file.read()
     if len(raw) > 5_000_000:
         raise HTTPException(status_code=400, detail="File too large (max ~5MB for demo)")
     disp = (label or "").strip() or (file.filename or "Uploaded CSV")
+    ctx = (import_context or "").strip()
+    if len(ctx) > _MAX_IMPORT_CONTEXT_LEN:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Import context too long (max {_MAX_IMPORT_CONTEXT_LEN} characters).",
+        )
     try:
         from core.credentials_crypto import encrypt_config
         from data_sources.csv_loader import load_csv_into_schema
@@ -174,7 +188,11 @@ async def upload_csv(
         from data_sources.service import insert_source
 
         table_name, catalog = load_csv_into_schema(
-            raw, connection_url=pg_url, upload_schema=upload_schema, table_label=disp
+            raw,
+            connection_url=pg_url,
+            upload_schema=upload_schema,
+            table_label=disp,
+            import_context=ctx or None,
         )
         fp = schema_fingerprint(catalog)
         enc = encrypt_config(

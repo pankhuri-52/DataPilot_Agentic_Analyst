@@ -7,6 +7,8 @@ import re
 import uuid
 from typing import Any
 
+from core.postgres_dsn import sanitize_postgres_uri_for_psycopg2
+
 
 def _sanitize_col(name: str) -> str:
     s = re.sub(r"[^a-zA-Z0-9_]", "_", (name or "").strip())
@@ -23,6 +25,7 @@ def load_csv_into_schema(
     connection_url: str,
     upload_schema: str,
     table_label: str,
+    import_context: str | None = None,
     max_rows: int = 50_000,
 ) -> tuple[str, dict[str, Any]]:
     """
@@ -55,7 +58,7 @@ def load_csv_into_schema(
     ddl_create_schema = f'CREATE SCHEMA IF NOT EXISTS "{upload_schema}";'
     ddl_table = f'CREATE TABLE "{upload_schema}"."{table_name}" ({col_defs});'
 
-    conn = psycopg2.connect(connection_url)
+    conn = psycopg2.connect(sanitize_postgres_uri_for_psycopg2(connection_url))
     try:
         conn.autocommit = True
         with conn.cursor() as cur:
@@ -75,13 +78,19 @@ def load_csv_into_schema(
     finally:
         conn.close()
 
+    ctx = (import_context or "").strip()
+    table_desc = table_label
+    if ctx:
+        table_desc = f"{table_label}. {ctx[:1500]}{'…' if len(ctx) > 1500 else ''}"
     catalog: dict[str, Any] = {
         "dataset": upload_schema,
-        "description": f"Uploaded CSV: {table_label}",
+        "description": f"User-uploaded CSV in Postgres ({table_label}).",
+        "source_kind": "user_csv",
+        "import_context": ctx or None,
         "tables": [
             {
                 "name": table_name,
-                "description": table_label,
+                "description": table_desc,
                 "columns": [{"name": c, "type": "STRING", "description": ""} for c in header],
             }
         ],

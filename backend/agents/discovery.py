@@ -23,6 +23,7 @@ Database schema (tables and columns):
 
 {data_ranges_section}
 
+{user_csv_note}
 Your job:
 1. Check if the requested metrics and dimensions can be satisfied with the available tables and columns.
 2. If the plan has date filters (e.g. start_date, end_date, period like "last_month", "last_quarter"), check whether the requested time range falls within the available data_range above. If the requested period is outside the known range, set feasibility to "partial" or "none" and explain in missing_explanation. Quote the actual min and max dates from the data availability section above (illustrative wording only: e.g. orders/sales_daily often align with roughly 2024-03-01 to 2025-03-01 in the enriched dataset — use the real values from the schema text above; return_dates may extend slightly later).
@@ -71,6 +72,12 @@ def run_discovery(state: dict) -> dict:
     schema_json = json.dumps(schema, indent=2)
     data_ranges = extract_data_ranges(schema)
     data_ranges_section = data_ranges
+    user_csv_note = ""
+    if (schema.get("source_kind") or "").strip().lower() == "user_csv":
+        user_csv_note = (
+            "SCOPE: User-uploaded spreadsheet only. Use only tables and columns in the schema JSON. "
+            "Retail mapping hints below apply only if those tables appear in the JSON.\n\n"
+        )
 
     append_trace(
         trace,
@@ -95,6 +102,7 @@ def run_discovery(state: dict) -> dict:
             filters=json.dumps(filters),
             schema_json=schema_json,
             data_ranges_section=data_ranges_section,
+            user_csv_note=user_csv_note,
         )
         result = invoke_with_retry(structured_llm, prompt)
 

@@ -5,6 +5,8 @@ import hashlib
 import json
 from typing import Any
 
+from core.postgres_dsn import sanitize_postgres_uri_for_psycopg2
+
 
 def _pg_type_to_meta(pg_type: str) -> str:
     t = (pg_type or "").lower()
@@ -40,7 +42,7 @@ def introspect_postgres(
             kw["port"] = int(kw["port"])
         conn = psycopg2.connect(**kw)
     else:
-        conn = psycopg2.connect(connection_url)
+        conn = psycopg2.connect(sanitize_postgres_uri_for_psycopg2(connection_url))
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
