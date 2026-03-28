@@ -29,13 +29,12 @@ import {
   PinOff,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
-import { useChat } from "@/contexts/ChatContext";
+import { CONVERSATIONS_UI_MAX, useChat } from "@/contexts/ChatContext";
 import { useAppMainHeader } from "@/contexts/AppMainHeaderContext";
 import { ThemeToggleButton } from "@/components/ThemeToggleButton";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
-const SIDEBAR_CHATS_MAX = 12;
 const SIDEBAR_STORAGE_KEY = "datapilot_sidebar_collapsed";
 const CHATS_SECTION_STORAGE_KEY = "datapilot_sidebar_chats_expanded";
 const CHATS_PIN_STORAGE_KEY = "datapilot_sidebar_chats_pinned";
@@ -186,6 +185,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const {
     startNewChat,
     conversations,
+    conversationsTotal,
     currentConversationId,
     loadConversation,
     conversationsError,
@@ -255,7 +255,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div
-      className="flex min-h-screen"
+      className="flex h-svh min-h-0 overflow-hidden"
       style={
         {
           ["--sidebar-width" as string]: sidebarWidth,
@@ -483,9 +483,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                       {chatsPinned ? "Recent chats" : "Chats"}
                     </p>
                     <div className="flex shrink-0 items-center gap-0.5">
-                      {conversations.length > 0 && (
+                      {conversationsTotal > 0 && (
                         <span className="inline-flex items-center rounded-full border border-sidebar-border/70 px-1.5 py-0.5 text-[9px] font-medium text-muted-foreground">
-                          {Math.min(conversations.length, SIDEBAR_CHATS_MAX)}
+                          {conversationsTotal}
                         </span>
                       )}
                       <Button
@@ -519,7 +519,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                     </p>
                   ) : chatsPinned ? (
                     <div id="sidebar-chats-list" className="space-y-0.5 pr-0.5">
-                      {conversations.slice(0, SIDEBAR_CHATS_MAX).map((c) => {
+                      {conversations.slice(0, CONVERSATIONS_UI_MAX).map((c) => {
                         const selected = c.id === currentConversationId && pathname === "/";
                         return (
                           <button
@@ -573,7 +573,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                           id="sidebar-chats-list-collapsible"
                           className="min-h-[2rem] space-y-0.5 pr-0.5"
                         >
-                          {conversations.slice(0, SIDEBAR_CHATS_MAX).map((c) => {
+                          {conversations.slice(0, CONVERSATIONS_UI_MAX).map((c) => {
                             const selected = c.id === currentConversationId && pathname === "/";
                             return (
                               <button
@@ -748,7 +748,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </aside>
       <main
         className={cn(
-          "relative z-0 flex min-h-screen min-w-0 flex-1 flex-col pl-[var(--sidebar-width)]",
+          "relative z-0 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden pl-[var(--sidebar-width)]",
           /* Keep content below fixed chrome; max() guards if measured height lags wrapping/fonts */
           "pt-[max(5.25rem,var(--app-chrome-header-h))]",
           !isResizing && "transition-[padding-left] duration-200 ease-out"

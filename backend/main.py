@@ -263,11 +263,11 @@ def _chat_error_detail(exc: BaseException) -> str:
 
 @app.get("/conversations")
 def list_conversations(user=Depends(_require_user)):
-    """List conversations for the current user."""
+    """List conversations for the current user (newest first, capped server-side)."""
     try:
         from supabase_service import list_conversations as _list
 
-        return {"conversations": _list(user["id"])}
+        return _list(user["id"])
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:

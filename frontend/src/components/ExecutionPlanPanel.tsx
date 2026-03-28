@@ -132,6 +132,10 @@ function formatDiscoveryStatus(
 
 function traceDisplayForPhase(trace: TraceEntry[], phase: string): string | undefined {
   const entries = trace.filter((e) => e.agent === phase);
+  return traceDisplayForPhaseEntries(phase, entries);
+}
+
+function traceDisplayForPhaseEntries(phase: string, entries: TraceEntry[]): string | undefined {
   const last = entries[entries.length - 1];
   if (!last?.message) return undefined;
   if (phase === "discovery") {
@@ -142,6 +146,42 @@ function traceDisplayForPhase(trace: TraceEntry[], phase: string): string | unde
 
 function traceEntriesForPhase(trace: TraceEntry[], phase: string): TraceEntry[] {
   return trace.filter((e) => e.agent === phase);
+}
+
+/** Phase is finished only on terminal trace row (matches backend append_trace contract). */
+function isPhaseTerminalComplete(trace: TraceEntry[], phase: ExecutionPhase): boolean {
+  const entries = traceEntriesForPhase(trace, phase);
+  if (entries.length === 0) return false;
+  const last = entries[entries.length - 1];
+  return last.status === "success" || last.status === "error";
+}
+
+/**
+ * While the graph runs, only one pipeline phase is "current": the first in order
+ * that has not yet emitted a terminal success/error. Never advance on a later
+ * agent's info lines alone (avoids executor=✓ while validator shows a spinner).
+ */
+function sequentialPipelineActivePhase(trace: TraceEntry[]): ExecutionPhase {
+  for (const phase of EXECUTION_PHASE_ORDER) {
+    if (!isPhaseTerminalComplete(trace, phase)) {
+      return phase;
+    }
+  }
+  return "visualization";
+}
+
+function phaseEntriesForDisplay(
+  trace: TraceEntry[],
+  phase: ExecutionPhase,
+  active: ExecutionPhase,
+  loading: boolean
+): TraceEntry[] {
+  const raw = traceEntriesForPhase(trace, phase);
+  if (!loading) return raw;
+  const pi = phaseIdx(phase);
+  const ai = phaseIdx(active);
+  if (pi > ai) return [];
+  return raw;
 }
 
 function formatTraceEntryMessage(phase: string, entry: TraceEntry): string {
@@ -473,13 +513,17 @@ export function ExecutionPlanPanel({
     pendingInterrupt?.reason === "query_cache_hit" ||
     pendingInterrupt?.data?.reason === "query_cache_hit";
 
-  const activePhase: ExecutionPhase = useMemo(() => {
+  /** Single "current" pipeline step while loading — first phase without terminal success/error. */
+  const pipelineActivePhase: ExecutionPhase = useMemo(() => {
     if (awaitingExecute) return "optimizer";
     if (awaitingQueryCache) return "planner";
-    if (isLoading && liveTrace.length === 0) return "planner";
+    if (isLoading) {
+      if (liveTrace.length === 0) return "planner";
+      return sequentialPipelineActivePhase(liveTrace);
+    }
     if (lastTraceAgent) return lastTraceAgent;
     return "planner";
-  }, [awaitingExecute, awaitingQueryCache, isLoading, liveTrace.length, lastTraceAgent]);
+  }, [awaitingExecute, awaitingQueryCache, isLoading, liveTrace, lastTraceAgent]);
 
   const fullPipelineComplete =
     isTurnComplete && lastTraceAgent === "visualization";
@@ -495,9 +539,9 @@ export function ExecutionPlanPanel({
     if (isTurnComplete || !isLoading) return;
     setAccordionValue((prev) => {
       const prior = Array.isArray(prev) ? prev : [];
-      return Array.from(new Set([...prior, activePhase]));
+      return Array.from(new Set([...prior, pipelineActivePhase]));
     });
-  }, [activePhase, isLoading, isTurnComplete]);
+  }, [pipelineActivePhase, isLoading, isTurnComplete]);
 
   function stepStatus(phase: ExecutionPhase): PhaseStepStatus {
     const pi = phaseIdx(phase);
@@ -517,18 +561,11 @@ export function ExecutionPlanPanel({
       return "pending";
     }
     if (isLoading) {
-      const ai = phaseIdx(activePhase);
-      const entriesForPhase = traceEntriesForPhase(liveTrace, phase);
-      const lastEntry = entriesForPhase[entriesForPhase.length - 1];
-      const phaseFinishedByTrace =
-        lastEntry &&
-        (lastEntry.status === "success" || lastEntry.status === "error");
+      const ai = phaseIdx(pipelineActivePhase);
       if (pi < ai) return "done";
-      if (pi === ai) {
-        if (phaseFinishedByTrace) return "done";
-        return "active";
-      }
-      return "pending";
+      if (pi > ai) return "pending";
+      if (isPhaseTerminalComplete(liveTrace, phase)) return "done";
+      return "active";
     }
     if (lastTraceAgent) {
       const li = phaseIdx(lastTraceAgent);
@@ -538,11 +575,22 @@ export function ExecutionPlanPanel({
     return "pending";
   }
 
-  const activeIndex = phaseIdx(activePhase);
+  const activeIndex = phaseIdx(pipelineActivePhase);
   const progressLabel = isLoading ? `Step ${activeIndex + 1} of ${steps.length}` : null;
 
+  const runNeedsAttention = Boolean(isLoading || pendingInterrupt);
+
   return (
-    <div className="rounded-xl border border-border bg-card/50">
+    <div
+      className={cn(
+        "rounded-xl border transition-[box-shadow,background-color,border-color] duration-200",
+        runNeedsAttention
+          ? "relative z-[2] border-primary/50 bg-primary/[0.07] shadow-md ring-2 ring-primary/25 dark:border-primary/45 dark:bg-primary/12 dark:ring-primary/30"
+          : "border-border bg-card/50"
+      )}
+      aria-busy={runNeedsAttention ? true : undefined}
+      aria-live={runNeedsAttention ? "polite" : undefined}
+    >
       {/* ── Collapsed "all done" pill ── */}
       {panelCollapsed && fullPipelineComplete ? (
         <button
@@ -576,9 +624,21 @@ export function ExecutionPlanPanel({
           )}
 
           <div className="px-4 pb-4 pt-2">
-            <p className="mb-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-              Execution plan
-            </p>
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              <p
+                className={cn(
+                  "text-xs font-semibold uppercase tracking-wider",
+                  runNeedsAttention ? "text-primary" : "text-muted-foreground"
+                )}
+              >
+                Execution plan
+              </p>
+              {runNeedsAttention && (
+                <span className="inline-flex items-center rounded-full bg-primary/15 px-2 py-0.5 text-[10px] font-medium text-primary dark:bg-primary/25">
+                  In progress
+                </span>
+              )}
+            </div>
 
             <Accordion
               multiple
@@ -593,12 +653,17 @@ export function ExecutionPlanPanel({
                 if (!isPhase(ph)) return null;
 
                 const status = stepStatus(ph);
-                const phaseEntries = traceEntriesForPhase(liveTrace, ph);
-                const statusLine = traceDisplayForPhase(liveTrace, ph);
+                const phaseEntries = phaseEntriesForDisplay(
+                  liveTrace,
+                  ph,
+                  pipelineActivePhase,
+                  isLoading
+                );
+                const statusLine = traceDisplayForPhaseEntries(ph, phaseEntries);
 
                 const hasTimeline =
                   phaseEntries.length > 0 ||
-                  (status === "active" && isLoading && ph === activePhase) ||
+                  (status === "active" && isLoading && ph === pipelineActivePhase) ||
                   (status === "awaiting" &&
                     ((ph === "optimizer" && awaitingExecute) ||
                       (ph === "planner" && awaitingQueryCache)));
@@ -623,10 +688,11 @@ export function ExecutionPlanPanel({
                     key={ph}
                     value={ph}
                     className={cn(
-                      "border-border/80",
-                      // Highlight the active phase row with a very subtle left accent bar
+                      "border-border/80 rounded-lg",
                       status === "active" &&
-                        "relative before:absolute before:left-[-16px] before:top-1 before:bottom-1 before:w-[2px] before:rounded-full before:bg-primary/40"
+                        "relative bg-primary/10 py-1 pl-1 dark:bg-primary/15",
+                      status === "active" &&
+                        "before:absolute before:left-[-16px] before:top-1 before:bottom-1 before:w-[2px] before:rounded-full before:bg-primary"
                     )}
                   >
                     <div className="flex gap-3 py-2">
@@ -715,7 +781,7 @@ export function ExecutionPlanPanel({
 
             {/* Progress label shown during active loading */}
             {progressLabel && (
-              <p className="mt-2 text-[11px] text-muted-foreground motion-reduce:opacity-100">
+              <p className="mt-3 text-xs font-medium text-primary motion-reduce:opacity-100">
                 {progressLabel} in progress…
               </p>
             )}

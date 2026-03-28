@@ -8,13 +8,19 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { MessageSquare, LogIn } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
-import { useChat } from "@/contexts/ChatContext";
+import { CONVERSATIONS_UI_MAX, useChat } from "@/contexts/ChatContext";
 import { cn } from "@/lib/utils";
 
 export default function ChatsPage() {
   const router = useRouter();
   const { user } = useAuth();
-  const { conversations, currentConversationId, loadConversation, fetchConversations } = useChat();
+  const {
+    conversations,
+    conversationsTotal,
+    currentConversationId,
+    loadConversation,
+    fetchConversations,
+  } = useChat();
 
   useEffect(() => {
     if (user) {
@@ -60,9 +66,17 @@ export default function ChatsPage() {
         </Card>
       ) : (
         <>
-          <h2 className="text-sm font-medium text-muted-foreground">
-            {conversations.length} conversation{conversations.length !== 1 ? "s" : ""}
-          </h2>
+          <div className="space-y-1">
+            <h2 className="text-sm font-medium text-muted-foreground">
+              {conversationsTotal} conversation{conversationsTotal !== 1 ? "s" : ""}
+            </h2>
+            {conversationsTotal > CONVERSATIONS_UI_MAX && (
+              <p className="text-xs text-muted-foreground/90">
+                Showing your {CONVERSATIONS_UI_MAX} most recent chats. Older ones are still stored but
+                not listed here.
+              </p>
+            )}
+          </div>
           <div className="space-y-4">
             {conversations.map((conv) => (
               <Card

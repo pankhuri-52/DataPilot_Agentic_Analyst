@@ -775,16 +775,11 @@ export function DataPilotClient() {
     user?.name || user?.email?.split("@")[0] || "there";
 
   return (
-    <div className="flex flex-1 flex-col min-w-0">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div className="space-y-6 pb-28 sm:pb-32">
         {user && messages.length > 0 && (suggestedLoading || suggestedQuestions.length > 0) && (
-          <div
-            className={cn(
-              "sticky top-0 z-10 border-b border-border/50 bg-background/95 px-0 py-2.5 backdrop-blur-sm supports-[backdrop-filter]:bg-background/90",
-              "dark:border-border/40"
-            )}
-          >
-            <div className="mx-auto w-full max-w-xl text-left">
+          <div className="mx-auto w-full max-w-xl rounded-xl border border-border/80 bg-muted/25 px-3 py-3 dark:bg-muted/15">
+            <div className="text-left">
               <div className="flex items-start gap-2">
                 <Sparkles
                   className="mt-0.5 size-3.5 shrink-0 text-primary"

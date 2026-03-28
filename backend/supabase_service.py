@@ -173,20 +173,28 @@ def get_user_from_token(access_token: str) -> dict[str, Any] | None:
 
 # ---- Chat (service role) ----
 
+# Newest-first list cap for API/UI; older rows stay in DB but are omitted from this endpoint.
+CONVERSATIONS_LIST_LIMIT = 100
 
-def list_conversations(user_id: str) -> list[dict[str, Any]]:
-    """List conversations for a user, newest first."""
+
+def list_conversations(user_id: str) -> dict[str, Any]:
+    """List up to CONVERSATIONS_LIST_LIMIT newest conversations; ``total`` is full row count."""
 
     def _run():
         client = _get_service_client()
         response = (
             client.table("conversations")
-            .select("id, title, created_at, updated_at")
+            .select("id, title, created_at, updated_at", count="exact")
             .eq("user_id", user_id)
             .order("updated_at", desc=True)
+            .limit(CONVERSATIONS_LIST_LIMIT)
             .execute()
         )
-        return [dict(row) for row in (response.data or [])]
+        rows = [dict(row) for row in (response.data or [])]
+        total = response.count
+        if total is None:
+            total = len(rows)
+        return {"conversations": rows, "total": int(total)}
 
     return retry_sync("supabase.chat.list_conversations", _run)
 

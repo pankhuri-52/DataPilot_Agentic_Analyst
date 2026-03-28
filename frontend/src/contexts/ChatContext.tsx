@@ -30,6 +30,9 @@ export interface Conversation {
   updated_at: string;
 }
 
+/** Matches backend ``CONVERSATIONS_LIST_LIMIT`` — max chats returned and shown in UI lists. */
+export const CONVERSATIONS_UI_MAX = 100;
+
 export interface Message {
   id: string;
   role: "user" | "assistant";
@@ -69,6 +72,8 @@ async function parseErrorDetail(res: Response): Promise<string> {
 
 interface ChatContextType {
   conversations: Conversation[];
+  /** Total conversations for this user in the database (may exceed ``conversations.length``). */
+  conversationsTotal: number;
   currentConversationId: string | null;
   messages: Message[];
   setMessages: React.Dispatch<React.SetStateAction<Message[]>>;
@@ -95,6 +100,7 @@ const ChatContext = createContext<ChatContextType | undefined>(undefined);
 export function ChatProvider({ children }: { children: ReactNode }) {
   const { user, getAccessToken } = useAuth();
   const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [conversationsTotal, setConversationsTotal] = useState(0);
   const [currentConversationId, setCurrentConversationIdState] = useState<string | null>(null);
   const [messagesByConv, setMessagesByConv] = useState<Record<string, Message[]>>({});
   const [conversationsError, setConversationsError] = useState<string | null>(null);
@@ -152,8 +158,14 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
   const upsertConversation = useCallback((conv: Conversation) => {
     setConversations((prev) => {
-      const rest = prev.filter((x) => x.id !== conv.id);
-      return [conv, ...rest];
+      const had = prev.some((x) => x.id === conv.id);
+      const next = [conv, ...prev.filter((x) => x.id !== conv.id)].slice(0, CONVERSATIONS_UI_MAX);
+      queueMicrotask(() => {
+        if (!had) {
+          setConversationsTotal((t) => t + 1);
+        }
+      });
+      return next;
     });
     setConversationsError(null);
   }, []);
@@ -169,7 +181,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       );
       if (res.ok) {
         const data = await res.json();
-        setConversations(data.conversations || []);
+        const list = (data.conversations || []) as Conversation[];
+        setConversations(list.slice(0, CONVERSATIONS_UI_MAX));
+        const t = data.total;
+        setConversationsTotal(typeof t === "number" && Number.isFinite(t) ? t : list.length);
         setConversationsError(null);
       } else {
         setConversationsError(await parseErrorDetail(res));
@@ -184,6 +199,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       fetchConversations();
     } else {
       setConversations([]);
+      setConversationsTotal(0);
       setCurrentConversationIdState(null);
       setMessagesByConv({});
       setConversationsError(null);
@@ -260,6 +276,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     <ChatContext.Provider
       value={{
         conversations,
+        conversationsTotal,
         currentConversationId,
         messages,
         setMessages,
