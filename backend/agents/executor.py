@@ -10,7 +10,8 @@ from agents.state import TraceEntry
 from agents.context import get_effective_connector, get_effective_schema
 from agents.schema_utils import plan_result_limit_display, sql_row_limit_rule_5
 from agents.trace_stream import append_trace
-from agents.optimizer import clean_sql_text, validate_sql_against_schema, repair_sql_with_feedback
+from agents.optimizer import clean_sql_text, repair_sql_with_feedback
+from agents.sql_allowlist import validate_sql_against_schema
 
 
 # Block DDL, DML, and dangerous operations

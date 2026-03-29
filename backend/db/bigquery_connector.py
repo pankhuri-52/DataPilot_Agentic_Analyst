@@ -51,6 +51,31 @@ def _serialize(v: Any) -> Any:
     return v
 
 
+_TIB_BYTES = 1024**4
+
+
+def format_bigquery_cost_estimate_for_user(bytes_processed: int, cost_usd: float) -> str:
+    """
+    Multi-line text for traces / execute-confirm UI: fixed 4-decimal USD and explicit $5/TiB formula.
+    """
+    if bytes_processed <= 0:
+        return (
+            "Dry run: 0 billable bytes — no on-demand charge from this estimate.\n"
+            "Pricing note: BigQuery on-demand is about $5.00 per tebibyte (TiB) scanned."
+        )
+    mb = bytes_processed / (1024**2)
+    usd = f"{max(cost_usd, 0.0):.4f}"
+    b_fmt = f"{bytes_processed:,}"
+    tib_fmt = f"{_TIB_BYTES:,}"
+    return (
+        f"~{mb:.2f} MB scanned ({b_fmt} bytes).\n"
+        f"Estimated on-demand charge: ${usd} USD.\n"
+        f"How we calculated it: (bytes scanned ÷ 1 TiB) × $5/TiB → "
+        f"({b_fmt} ÷ {tib_fmt}) × $5.00 ≈ ${usd}. "
+        f"Billing is for bytes scanned, not how many rows are returned."
+    )
+
+
 class BigQueryConnector(DatabaseConnector):
     """BigQuery database connector."""
 

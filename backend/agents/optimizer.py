@@ -15,6 +15,8 @@ from agents.state import TraceEntry
 from agents.context import get_effective_connector, get_effective_schema
 from agents.schema_utils import plan_result_limit_display, sql_row_limit_rule_5
 from agents.trace_stream import append_trace
+from agents.sql_allowlist import extract_known_metadata_tables, validate_sql_against_schema
+from db.bigquery_connector import format_bigquery_cost_estimate_for_user
 
 
 FORBIDDEN_SQL_PATTERNS = re.compile(
@@ -100,20 +102,9 @@ Rules:
 """
 
 
-def _extract_main_tables(sql: str, schema: dict) -> list[str]:
-    """Best-effort extraction of table names referenced in SQL (lowercase, unquoted)."""
-    known = {t["name"].lower() for t in (schema.get("tables") or []) if isinstance(t, dict) and t.get("name")}
-    found = []
-    for token in re.findall(r'(?:FROM|JOIN)\s+"?(\w+)"?', sql, re.IGNORECASE):
-        t = token.strip('"').lower()
-        if t in known and t not in found:
-            found.append(t)
-    return found
-
-
 def _postgres_estimate_bytes(connector, sql: str, schema: dict) -> int | None:
     """Estimate total bytes by summing pg_total_relation_size for tables in the SQL."""
-    tables = _extract_main_tables(sql, schema)
+    tables = extract_known_metadata_tables(sql, schema)
     if not tables:
         return None
     total = 0
@@ -155,63 +146,6 @@ def clean_sql_text(raw_sql: str) -> str:
     return sql.strip()
 
 
-def _schema_table_columns(schema: dict) -> dict[str, set[str]]:
-    out: dict[str, set[str]] = {}
-    for t in schema.get("tables") or []:
-        if not isinstance(t, dict):
-            continue
-        tname = str(t.get("name") or "").strip().lower()
-        cols = t.get("columns")
-        if not tname or not isinstance(cols, list):
-            continue
-        colset: set[str] = set()
-        for c in cols:
-            if not isinstance(c, dict):
-                continue
-            cname = str(c.get("name") or "").strip().lower()
-            if cname:
-                colset.add(cname)
-        out[tname] = colset
-    return out
-
-
-def validate_sql_against_schema(sql: str, schema: dict) -> tuple[bool, str | None]:
-    table_cols = _schema_table_columns(schema)
-    if not table_cols:
-        return False, "Schema catalog is empty; no tables available."
-
-    alias_map: dict[str, str] = {}
-    table_hits = 0
-    for m in re.finditer(
-        r"\b(?:FROM|JOIN)\s+([`\"\w\.\-]+)(?:\s+(?:AS\s+)?([A-Za-z_][A-Za-z0-9_]*))?",
-        sql,
-        re.IGNORECASE,
-    ):
-        raw_table = (m.group(1) or "").strip()
-        alias = (m.group(2) or "").strip().lower()
-        base_table = raw_table.replace("`", "").replace('"', "").split(".")[-1].lower()
-        if base_table not in table_cols:
-            return False, f"Unknown table referenced: {base_table}"
-        table_hits += 1
-        alias_map[base_table] = base_table
-        if alias:
-            alias_map[alias] = base_table
-
-    if table_hits == 0:
-        return False, "SQL has no FROM/JOIN table references."
-
-    for alias, col in re.findall(r"\b([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\b", sql):
-        a = alias.lower()
-        c = col.lower()
-        if a in alias_map:
-            table_name = alias_map[a]
-            if c not in table_cols.get(table_name, set()):
-                return False, f"Unknown column '{col}' on table '{table_name}'."
-        elif a in table_cols and c not in table_cols[a]:
-            return False, f"Unknown column '{col}' on table '{a}'."
-    return True, None
-
-
 def repair_sql_with_feedback(
     *,
     llm,
@@ -248,6 +182,8 @@ def run_optimizer_prepare(state: dict) -> dict:
     nearest_plan = state.get("nearest_plan")
     data_feasibility = state.get("data_feasibility", "none")
     trace = state.get("trace", [])
+    regen_hint = (state.get("optimizer_regenerate_hint") or "").strip()
+    user_query = (state.get("query") or "").strip()
 
     append_trace(
         trace,
@@ -259,7 +195,7 @@ def run_optimizer_prepare(state: dict) -> dict:
             trace,
             TraceEntry(agent="optimizer", status="info", message="Skipped – no feasible data").model_dump(),
         )
-        return {"trace": trace}
+        return _clear_regen_hint_if_retry(regen_hint, {"trace": trace})
 
     effective_plan = nearest_plan if data_feasibility == "partial" and nearest_plan else plan
     if not effective_plan:
@@ -267,7 +203,7 @@ def run_optimizer_prepare(state: dict) -> dict:
             trace,
             TraceEntry(agent="optimizer", status="error", message="No plan available").model_dump(),
         )
-        return {"trace": trace}
+        return _clear_regen_hint_if_retry(regen_hint, {"trace": trace})
 
     connector = get_effective_connector(state)
 
@@ -276,7 +212,7 @@ def run_optimizer_prepare(state: dict) -> dict:
             trace,
             TraceEntry(agent="optimizer", status="error", message="No database configured.").model_dump(),
         )
-        return {"trace": trace}
+        return _clear_regen_hint_if_retry(regen_hint, {"trace": trace})
 
     schema = get_effective_schema(state)
     schema_json = json.dumps(schema, indent=2)
@@ -316,6 +252,9 @@ def run_optimizer_prepare(state: dict) -> dict:
                 dataset=dataset_id,
                 few_shot=_FEW_SHOT_BIGQUERY.format(project=project_id, dataset=dataset_id),
             )
+        if regen_hint:
+            qline = f"\nOriginal user question: {user_query}\n" if user_query else ""
+            prompt = f"{prompt}\n\nCorrection — the user declined the previous SQL without running it:{qline}{regen_hint}\n"
         response = invoke_with_retry(llm, prompt)
         sql = clean_sql_text(response.content if hasattr(response, "content") else str(response))
 
@@ -328,7 +267,7 @@ def run_optimizer_prepare(state: dict) -> dict:
                     message="Generated SQL contains forbidden operations",
                 ).model_dump(),
             )
-            return {"trace": trace}
+            return _clear_regen_hint_if_retry(regen_hint, {"trace": trace})
 
         append_trace(
             trace,
@@ -362,20 +301,25 @@ def run_optimizer_prepare(state: dict) -> dict:
                         message=f"SQL failed schema validation after correction: {validation_error}",
                     ).model_dump(),
                 )
-                return {"trace": trace}
+                return _clear_regen_hint_if_retry(regen_hint, {"trace": trace})
 
         bytes_scanned = None
         estimated_cost = None
         if dialect == "bigquery" and hasattr(connector, "dry_run_estimate"):
             try:
                 bytes_scanned, estimated_cost = connector.dry_run_estimate(sql)
+                cost_msg = format_bigquery_cost_estimate_for_user(bytes_scanned, estimated_cost)
                 append_trace(
                     trace,
                     TraceEntry(
                         agent="optimizer",
                         status="info",
-                        message=f"Dry run: ~{bytes_scanned / (1024**2):.2f} MB, ~${estimated_cost:.6f}",
-                        output={"bytes_scanned": bytes_scanned, "estimated_cost": estimated_cost},
+                        message=cost_msg,
+                        output={
+                            "bytes_scanned": bytes_scanned,
+                            "estimated_cost": estimated_cost,
+                            "cost_summary": cost_msg,
+                        },
                     ).model_dump(),
                 )
             except Exception as e:
@@ -388,13 +332,25 @@ def run_optimizer_prepare(state: dict) -> dict:
                 bytes_scanned = _postgres_estimate_bytes(connector, sql, schema)
                 if bytes_scanned is not None:
                     estimated_cost = bytes_scanned / (1024 ** 3) * 0.00023  # ~$0.23/GB comparable rate
+                    mb = bytes_scanned / (1024**2)
+                    usd = f"{max(estimated_cost, 0.0):.4f}"
+                    b_fmt = f"{bytes_scanned:,}"
+                    pg_msg = (
+                        f"~{mb:.2f} MB referenced ({b_fmt} bytes, heuristic).\n"
+                        f"Estimated comparable charge: ${usd} USD (display only — not a live warehouse dry run).\n"
+                        "How: sum of referenced table sizes × ~$0.23/GiB as a rough scale; your provider may bill differently."
+                    )
                     append_trace(
                         trace,
                         TraceEntry(
                             agent="optimizer",
                             status="info",
-                            message=f"Size estimate: ~{bytes_scanned / (1024**2):.2f} MB",
-                            output={"bytes_scanned": bytes_scanned, "estimated_cost": estimated_cost},
+                            message=pg_msg,
+                            output={
+                                "bytes_scanned": bytes_scanned,
+                                "estimated_cost": estimated_cost,
+                                "cost_summary": pg_msg,
+                            },
                         ).model_dump(),
                     )
             except Exception as e:
@@ -419,13 +375,14 @@ def run_optimizer_prepare(state: dict) -> dict:
             except Exception:
                 pass
 
-        return {
+        out: dict = {
             "trace": trace,
             "pending_execute_sql": sql,
             "pending_execute_bytes": bytes_scanned,
             "pending_execute_cost": estimated_cost,
             "pending_execute_dialect": dialect,
         }
+        return _clear_regen_hint_if_retry(regen_hint, out)
 
     except Exception as e:
         err_type = type(e).__name__
@@ -436,7 +393,7 @@ def run_optimizer_prepare(state: dict) -> dict:
             trace,
             TraceEntry(agent="optimizer", status="error", message=str(e)).model_dump(),
         )
-        return {"trace": trace}
+        return _clear_regen_hint_if_retry(regen_hint, {"trace": trace})
 
 
 def _clear_pending_execute() -> dict:
@@ -446,6 +403,13 @@ def _clear_pending_execute() -> dict:
         "pending_execute_cost": None,
         "pending_execute_dialect": None,
     }
+
+
+def _clear_regen_hint_if_retry(regen_hint: str, update: dict) -> dict:
+    """Avoid optimizer_prepare ↔ gate loops if regeneration fails mid-prepare."""
+    if regen_hint:
+        update["optimizer_regenerate_hint"] = None
+    return update
 
 
 def run_optimizer_gate(state: dict) -> dict:
@@ -463,21 +427,66 @@ def run_optimizer_gate(state: dict) -> dict:
     if skip_hil:
         approved = True
     else:
+        cost_summary = None
+        if dialect == "bigquery" and bytes_scanned is not None and estimated_cost is not None:
+            cost_summary = format_bigquery_cost_estimate_for_user(bytes_scanned, estimated_cost)
+        elif dialect == "postgres" and bytes_scanned is not None and estimated_cost is not None:
+            mb = bytes_scanned / (1024**2)
+            usd = f"{max(estimated_cost, 0.0):.4f}"
+            b_fmt = f"{bytes_scanned:,}"
+            cost_summary = (
+                f"~{mb:.2f} MB referenced ({b_fmt} bytes, heuristic).\n"
+                f"Estimated comparable charge: ${usd} USD (display only — not a live dry run).\n"
+                "How: referenced table sizes × ~$0.23/GiB for scale; not Postgres-specific billing."
+            )
         interrupt_payload = {
             "reason": "execute_query",
             "sql": sql,
             "bytes_scanned": bytes_scanned,
             "estimated_cost": estimated_cost,
             "dialect": dialect,
+            "cost_summary": cost_summary,
         }
         approved = interrupt(interrupt_payload)
 
     if not approved:
+        declines = int(state.get("optimizer_decline_count") or 0) + 1
+        if declines >= 2:
+            append_trace(
+                trace,
+                TraceEntry(
+                    agent="optimizer",
+                    status="success",
+                    message=(
+                        "Stopped: you chose not to run the query again. "
+                        "Start a new message or rephrase your question if you need a different approach."
+                    ),
+                ).model_dump(),
+            )
+            return {
+                "trace": trace,
+                **_clear_pending_execute(),
+                "optimizer_decline_count": declines,
+                "optimizer_regenerate_hint": None,
+            }
         append_trace(
             trace,
-            TraceEntry(agent="optimizer", status="info", message="User declined to execute").model_dump(),
+            TraceEntry(
+                agent="optimizer",
+                status="info",
+                message="You declined this SQL — generating a revised query aligned with your question…",
+            ).model_dump(),
         )
-        return {"trace": trace, **_clear_pending_execute()}
+        return {
+            "trace": trace,
+            **_clear_pending_execute(),
+            "optimizer_decline_count": declines,
+            "optimizer_regenerate_hint": (
+                "The user rejected the proposed SQL without executing it. Re-read the original question and fix "
+                "aggregations and labels (e.g. average/mean/per-unit → AVG(...); total/sum → SUM(...); count → COUNT(...)). "
+                "Match the plan's metrics and dimensions. Return only a single corrected SELECT statement."
+            ),
+        }
 
     append_trace(
         trace,
@@ -492,6 +501,8 @@ def run_optimizer_gate(state: dict) -> dict:
         "sql": sql,
         "trace": trace,
         **_clear_pending_execute(),
+        "optimizer_decline_count": 0,
+        "optimizer_regenerate_hint": None,
     }
     if bytes_scanned is not None:
         update["bytes_scanned"] = bytes_scanned

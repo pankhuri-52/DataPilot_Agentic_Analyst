@@ -6,6 +6,7 @@
 
 - **Chat-first analytics** – Ask questions in plain English; see an analysis plan, step-by-step agent progress, and results with charts, tables, and SQL when available.
 - **Scope guardrails** – Off-topic questions get a clear “outside your data” response; vague questions ask for clarification (`query_scope` in the planner).
+- **Time-window guardrails** – Relative dates like “last month” are validated against catalogued `data_range` metadata before SQL execution. If the requested window is outside available data, the flow fails fast with an actionable clarification.
 - **Conversation history** – Signed-in users get titled threads in Supabase; the backend chat API **requires** **`SUPABASE_SERVICE_ROLE_KEY`**. Sessions stay signed in across reloads via refresh token (`POST /auth/refresh`).
 - **Data sources** – Primary warehouse is **environment-driven** (BigQuery or PostgreSQL). The **Data Sources** page calls `GET /data-sources/status` for live configuration/health—not mock data.
 - **Human-in-the-loop (optional)** – By default, the graph pauses for table approval and query execution approval. Set **`DATAPILOT_SKIP_INTERRUPTS=true`** in `.env` for a one-shot demo (skips both interrupts).
@@ -50,6 +51,10 @@ Create a `.env` file in the **project root** (same folder as `backend/` and `fro
 | `CORS_ALLOW_ORIGINS` | No | Comma-separated list; if unset, defaults include `localhost`/`127.0.0.1` on 3000–3001 |
 | `CORS_ALLOW_ORIGIN_REGEX` | No | Unset = allow `http(s)://localhost` and `127.0.0.1` on **any port** (fixes Next on 3001). Set to empty to disable regex in production |
 | `DATAPILOT_SKIP_INTERRUPTS` | No | `true` / `1` to skip approval interrupts |
+| `SUGGESTED_QUESTIONS_ENABLED` | No | `0` disables homepage/new-chat suggested questions |
+| `SUGGESTED_QUESTIONS_LLM` | No | `0` skips Gemini calls for suggested questions (schema-seeded fallback only) |
+| `SUGGESTED_QUESTIONS_INCLUDE_KB` | No | `0` disables Query KB retrieval when composing suggestions |
+| `SUGGESTED_QUESTIONS_CACHE_TTL_SEC` | No | In-process cache TTL for suggestions (set `0` to disable cache) |
 
 ## Database & Supabase
 
@@ -123,6 +128,13 @@ npx next dev -p 3001
 ## BigQuery sample data (optional)
 
 Scripts under [`backend/bigquery/scripts/`](backend/bigquery/scripts/) can create and load POC tables (`DDL/` and `DML/`). See [`backend/bigquery/scripts/README_DATA_MODEL.md`](backend/bigquery/scripts/README_DATA_MODEL.md) for the model and example questions.
+
+## Date availability behavior
+
+- Planner and discovery validate requested time windows using `data_range` values in [`backend/schema/metadata.json`](backend/schema/metadata.json).
+- Suggested questions are filtered so prompts like “last month” are dropped when that relative window falls outside catalogued dates.
+- If a question is outside available range, DataPilot returns a clarification with available min/max dates instead of executing SQL through all downstream steps.
+- After reseeding or changing warehouse data, update `data_range` values in `metadata.json` to keep guardrails and suggestions accurate.
 
 ## Limitations
 

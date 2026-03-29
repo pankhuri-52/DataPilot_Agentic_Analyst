@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from fastapi import FastAPI, HTTPException, Body, Depends, Query
 from pydantic import BaseModel
@@ -80,10 +81,61 @@ def _cors_allow_origin_regex() -> str | None:
     return r"https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$"
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Initialize LangGraph with a persistent Postgres checkpointer when DATABASE_URL is set."""
+    from agents.graph import build_graph, set_compiled_graph
+
+    try:
+        from langgraph.checkpoint.memory import MemorySaver
+    except ImportError:
+        from langgraph.checkpoint.memory import InMemorySaver as MemorySaver
+
+    def _use_memory(reason: str) -> None:
+        set_compiled_graph(build_graph(MemorySaver()))
+        logger.warning("%s; using in-memory LangGraph checkpoints (interrupts lost on API restart).", reason)
+
+    url = (os.getenv("POSTGRES_URL") or os.getenv("DATABASE_URL") or "").strip()
+    if url:
+        from core.postgres_dsn import sanitize_postgres_uri_for_psycopg2
+
+        url = sanitize_postgres_uri_for_psycopg2(url)
+        try:
+            from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+
+            async with AsyncPostgresSaver.from_conn_string(url, pipeline=False) as checkpointer:
+                await checkpointer.setup()
+                set_compiled_graph(build_graph(checkpointer))
+                logger.info("LangGraph checkpointer: PostgreSQL (interrupts survive API restart).")
+                if not os.getenv("SUPABASE_SERVICE_ROLE_KEY"):
+                    logger.warning(
+                        "SUPABASE_SERVICE_ROLE_KEY is not set; chat list/save will fail until you add it (see README)."
+                    )
+                yield
+        except Exception:
+            logger.exception(
+                "Failed to initialize PostgreSQL LangGraph checkpointer; falling back to in-memory."
+            )
+            _use_memory("PostgreSQL checkpointer unavailable")
+            if not os.getenv("SUPABASE_SERVICE_ROLE_KEY"):
+                logger.warning(
+                    "SUPABASE_SERVICE_ROLE_KEY is not set; chat list/save will fail until you add it (see README)."
+                )
+            yield
+    else:
+        _use_memory("POSTGRES_URL / DATABASE_URL not set")
+        if not os.getenv("SUPABASE_SERVICE_ROLE_KEY"):
+            logger.warning(
+                "SUPABASE_SERVICE_ROLE_KEY is not set; chat list/save will fail until you add it (see README)."
+            )
+        yield
+
+
 app = FastAPI(
     title="DataPilot API",
     description="Autonomous multi-agent analytics – turn questions into validated insights.",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 from data_sources.router import router as data_sources_router
@@ -98,14 +150,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-@app.on_event("startup")
-def _log_chat_env_hint():
-    if not os.getenv("SUPABASE_SERVICE_ROLE_KEY"):
-        logger.warning(
-            "SUPABASE_SERVICE_ROLE_KEY is not set — chat list/save will fail until you add it (see README)."
-        )
 
 
 @app.get("/health")
@@ -687,11 +731,21 @@ def _save_ask_messages(
 
 def _build_ask_response(state: dict) -> dict:
     """Build response dict from graph state."""
+    feas = state.get("data_feasibility")
+    miss = state.get("missing_explanation")
+    expl = state.get("explanation")
+    ans = state.get("answer_summary")
+    # Discovery short-circuit (feasibility none): one user-visible surface — avoid duplicating
+    # missing_explanation in Partial data and the same text again in Outcome.
+    if feas == "none" and miss and not (expl or "").strip():
+        expl = miss
+        ans = ans or miss
+        miss = None
     return {
         "plan": state.get("plan"),
-        "data_feasibility": state.get("data_feasibility"),
+        "data_feasibility": feas,
         "nearest_plan": state.get("nearest_plan"),
-        "missing_explanation": state.get("missing_explanation"),
+        "missing_explanation": miss,
         "tables_used": state.get("tables_used"),
         "sql": state.get("sql"),
         "bytes_scanned": state.get("bytes_scanned"),
@@ -699,8 +753,8 @@ def _build_ask_response(state: dict) -> dict:
         "results": state.get("raw_results"),
         "validation_ok": state.get("validation_ok"),
         "chart_spec": state.get("chart_spec"),
-        "explanation": state.get("explanation"),
-        "answer_summary": state.get("answer_summary"),
+        "explanation": expl,
+        "answer_summary": ans,
         "follow_up_suggestions": state.get("follow_up_suggestions"),
         "trace": state.get("trace", []),
         "data_range": state.get("data_range"),
@@ -791,6 +845,7 @@ def _merge_interrupt_client(state: dict, payload: dict) -> dict:
         p["bytes_scanned"] = bytes_scanned
     if estimated_cost is not None:
         p["estimated_cost"] = estimated_cost
+    cost_summary = p.get("cost_summary")
     tables_used = state.get("tables_used")
     if tables_used is None:
         tables_used = p.get("tables") or []
@@ -803,6 +858,7 @@ def _merge_interrupt_client(state: dict, payload: dict) -> dict:
         "sql": sql,
         "bytes_scanned": bytes_scanned,
         "estimated_cost": estimated_cost,
+        "cost_summary": cost_summary,
     }
 
 
@@ -934,7 +990,7 @@ async def _ask_stream_generator(
             # Checkpoint already holds trace through the interrupt; streaming re-yields full state
             # first, so without this we would emit duplicate progress for planner/discovery/optimizer.
             try:
-                snap = graph.get_state(config)
+                snap = await graph.aget_state(config)
                 vals = getattr(snap, "values", None) if snap is not None else None
                 if isinstance(vals, dict):
                     prev_trace_len = len(vals.get("trace") or [])
@@ -996,6 +1052,16 @@ async def _ask_stream_generator(
                 event = {"type": "progress", "agent": entry.get("agent", ""), "trace_entry": entry}
                 yield f"data: {json.dumps(event)}\n\n"
             prev_trace_len = len(trace)
+
+        # Resume paths (e.g. user declined execute) may finish without emitting a final "values" chunk;
+        # without this, last_state stays None and the client never receives type=complete (infinite loading).
+        try:
+            snap = await graph.aget_state(config)
+            vals = getattr(snap, "values", None)
+            if isinstance(vals, dict) and vals:
+                last_state = vals
+        except Exception:
+            pass
 
         if last_state is not None:
             response = _build_ask_response(last_state)

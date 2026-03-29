@@ -10,6 +10,7 @@ from agents.state import AnalysisPlan, TraceEntry
 from agents.trace_stream import append_trace
 from agents.context import get_effective_schema
 from agents.schema_utils import extract_data_ranges
+from agents.time_window_guard import plan_time_window_unavailable_message
 
 _SCHEMA_INTROSPECTION_PATTERNS = re.compile(
     r"\b("
@@ -436,6 +437,21 @@ def run_planner(state: dict) -> dict:
             plan_dict["clarifying_questions"] = [OUT_OF_SCOPE_MESSAGE]
         elif not plan_dict.get("is_valid") and scope not in ("out_of_scope", "needs_clarification", "data_question"):
             plan_dict["query_scope"] = "needs_clarification"
+
+        if plan_dict.get("is_valid"):
+            tw_msg = plan_time_window_unavailable_message(query, plan_dict, schema)
+            if tw_msg:
+                plan_dict["is_valid"] = False
+                plan_dict["clarifying_questions"] = [tw_msg]
+                plan_dict["query_scope"] = "data_question"
+                append_trace(
+                    trace,
+                    TraceEntry(
+                        agent="planner",
+                        status="info",
+                        message="Requested dates are outside the catalogued data range — stopping before SQL",
+                    ).model_dump(),
+                )
 
         _normalize_execution_steps(plan_dict)
 

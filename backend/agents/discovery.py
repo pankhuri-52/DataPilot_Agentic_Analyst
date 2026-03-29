@@ -8,6 +8,7 @@ from llm import get_gemini, invoke_with_retry
 from agents.state import DataFeasibility, TraceEntry
 from agents.context import get_effective_schema
 from agents.schema_utils import extract_data_ranges
+from agents.time_window_guard import plan_time_window_unavailable_message
 from agents.trace_stream import append_trace
 
 
@@ -108,6 +109,13 @@ def run_discovery(state: dict) -> dict:
 
         result_dict = result.model_dump() if hasattr(result, "model_dump") else result
         feasibility = result_dict.get("feasibility", "none")
+
+        tw_msg = plan_time_window_unavailable_message(state.get("query", ""), plan, schema)
+        if tw_msg:
+            feasibility = "none"
+            result_dict["feasibility"] = "none"
+            result_dict["missing_explanation"] = tw_msg
+            result_dict["nearest_plan"] = None
 
         tables_used = result_dict.get("tables_used", [])
 

@@ -106,6 +106,35 @@ function normalizeExecutionSteps(plan?: Record<string, unknown>): ExecutionStepR
   return rows;
 }
 
+const TIB_BYTES = 1024 ** 4;
+
+/** Fallback when backend does not send cost_summary (older checkpoints). */
+function formatLegacyQueryCostLine(
+  bytes: number | undefined,
+  cost: number | undefined
+): string | null {
+  if (bytes == null && cost == null) return null;
+  const lines: string[] = [];
+  if (bytes != null) {
+    lines.push(
+      `~${(bytes / (1024 * 1024)).toFixed(2)} MB scanned (${bytes.toLocaleString()} bytes).`
+    );
+  }
+  if (cost != null && Number.isFinite(cost)) {
+    const usd = cost <= 0 ? "0.0000" : cost.toFixed(4);
+    lines.push(`Estimated charge: $${usd} USD (on-demand).`);
+    if (bytes != null && bytes > 0) {
+      const tib = bytes / TIB_BYTES;
+      lines.push(
+        `How: (bytes scanned ÷ 1 TiB) × $5/TiB → (${bytes.toLocaleString()} ÷ ${TIB_BYTES.toLocaleString()}) × $5.00 ≈ $${usd}.`
+      );
+    } else {
+      lines.push("How: BigQuery on-demand pricing is about $5.00 per tebibyte (TiB) of data scanned (not rows returned).");
+    }
+  }
+  return lines.join("\n");
+}
+
 function textsRedundant(a: string | undefined, b: string | undefined): boolean {
   const na = (a ?? "").trim().toLowerCase();
   const nb = (b ?? "").trim().toLowerCase();
@@ -257,8 +286,10 @@ function useStaggeredSubstepReveal(
       typeof window !== "undefined" &&
       window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-    const shouldAnimate =
-      phaseStatus === "active" || phaseStatus === "done";
+    // Only stagger-reveal while the phase is actively running. If we animate "done",
+    // the last revealed substep stays "active" (spinner) until the interval catches up —
+    // so completed runs looked stuck on "Generating SQL… Processing" forever.
+    const shouldAnimate = phaseStatus === "active";
 
     if (reduceMotion || !shouldAnimate) {
       prevLenRef.current = len;
@@ -290,7 +321,7 @@ function useStaggeredSubstepReveal(
       return;
     }
 
-    const stepMs = phaseStatus === "done" ? 360 : 480;
+    const stepMs = 480;
     const id = window.setInterval(() => {
       step += 1;
       visibleCountRef.current = step;
@@ -313,6 +344,10 @@ function rowStateWithStagger(
   phase: ExecutionPhase
 ): "done" | "active" | "error" {
   if (isSubstepFailureLike(entry)) return "error";
+  if (phaseStatus === "done") return "done";
+  if (phaseStatus === "awaiting" && phase === "optimizer") {
+    return rowStateForTimeline(entry, index, totalEntries, phaseStatus, phase);
+  }
   if (index < visibleCount - 1) return "done";
   if (index === visibleCount - 1) {
     if (visibleCount < totalEntries) return "active";
@@ -422,7 +457,7 @@ function PhaseSubstepsTimeline({
             <SubstepDot state={rs} />
             <p
               className={cn(
-                "min-w-0 flex-1 break-words pt-0.5 text-[11px] leading-snug",
+                "min-w-0 flex-1 whitespace-pre-line break-words pt-0.5 text-[11px] leading-snug",
                 rs === "active"  && "font-medium text-foreground/90",
                 rs === "done"    && "text-muted-foreground",
                 rs === "error"   && "text-destructive"
@@ -507,6 +542,8 @@ export interface ExecutionPlanPanelProps {
     sql?: string;
     bytes_scanned?: number;
     estimated_cost?: number;
+    /** BigQuery/Postgres: full sentence from backend (avoids $0.000000 for tiny scans). */
+    cost_summary?: string;
   };
   onContinue?: (value: unknown) => void;
   continueDisabled?: boolean;
@@ -792,6 +829,12 @@ export function ExecutionPlanPanel({
                                       const sql = pendingInterrupt.sql ?? (pendingInterrupt.data?.sql as string | undefined);
                                       const bytes = pendingInterrupt.bytes_scanned ?? (pendingInterrupt.data?.bytes_scanned as number | undefined);
                                       const cost = pendingInterrupt.estimated_cost ?? (pendingInterrupt.data?.estimated_cost as number | undefined);
+                                      const costSummary =
+                                        pendingInterrupt.cost_summary ??
+                                        (pendingInterrupt.data?.cost_summary as string | undefined);
+                                      const costLine =
+                                        (costSummary && costSummary.trim()) ||
+                                        formatLegacyQueryCostLine(bytes, cost);
                                       return (
                                         <>
                                           {!sql && (
@@ -804,10 +847,9 @@ export function ExecutionPlanPanel({
                                               {sql}
                                             </pre>
                                           )}
-                                          {(bytes != null || cost != null) && (
-                                            <p className="text-xs text-muted-foreground">
-                                              {bytes != null && `~${(bytes / (1024 * 1024)).toFixed(2)} MB scanned`}
-                                              {cost != null && ` · ~$${cost.toFixed(6)} estimated cost`}
+                                          {costLine && (
+                                            <p className="whitespace-pre-line text-xs text-muted-foreground leading-relaxed">
+                                              {costLine}
                                             </p>
                                           )}
                                           <p className="text-xs text-muted-foreground">Execute this query?</p>

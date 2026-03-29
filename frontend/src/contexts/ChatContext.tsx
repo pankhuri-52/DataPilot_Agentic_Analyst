@@ -52,6 +52,7 @@ export interface Message {
     sql?: string;
     bytes_scanned?: number;
     estimated_cost?: number;
+    cost_summary?: string;
   };
   threadId?: string;
   /** Supabase conversation this turn belongs to (for /ask/continue and patchMessages routing). */

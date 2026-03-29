@@ -35,7 +35,7 @@ The default **retail / B2B POC model** includes dimensions and facts beyond core
 ## Critical flows
 
 1. **Streaming ask** – `POST /ask/stream` sends `{ query, conversation_id? }` with optional `Authorization`. First `interrupt` may include `conversation_id` after the user turn is persisted. Client must send `conversation_id` and `original_query` on `POST /ask/continue` so completion can append only the assistant message.
-2. **Checkpointer** – Compiled graph uses `MemorySaver` + `thread_id`. Each new question should use a fresh `thread_id` unless resuming the same interrupt.
+2. **Checkpointer** – Compiled graph uses `AsyncPostgresSaver` when `POSTGRES_URL` or `DATABASE_URL` is set (Supabase Postgres); otherwise `MemorySaver`. Each new question should use a fresh `thread_id` unless resuming the same interrupt.
 3. **Persistence** – `_save_ask_messages` / `_save_user_turn_only` in `main.py`. Failures are caught and return `None`; do not swallow new exceptions without logging if you are debugging chat saves.
 4. **Chat Supabase client** – `supabase_service` chat helpers use **only** `SUPABASE_SERVICE_ROLE_KEY` (no anon fallback). **`POST /auth/refresh`** plus `datapilot_refresh_token` in the browser keep sessions alive after access JWT expiry.
 

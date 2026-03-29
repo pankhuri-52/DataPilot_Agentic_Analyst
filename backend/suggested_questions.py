@@ -18,11 +18,11 @@ _CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 _CACHE_LOCK = threading.Lock()
 
 _GENERIC_FALLBACK = [
-    "What were total sales by region last month?",
-    "Show top 10 products by revenue this quarter.",
-    "How many orders per week over the last 90 days?",
+    "What were total sales by region in the loaded sample data?",
+    "Show top 10 products by revenue.",
+    "How many orders per week in the available date range?",
     "Compare return rates by product category.",
-    "Which sales reps had the highest revenue in the last month?",
+    "Which sales reps had the highest revenue in the sample period?",
 ]
 
 
@@ -310,7 +310,7 @@ def build_suggested_questions(
         fp_prefix = schema_fingerprint_from_schema(schema)[:24]
     except Exception:
         pass
-    cache_key = f"{user_id}|src={effective_source_id}|kb={int(kb_flag)}|n={lim}|{fp_prefix}"
+    cache_key = f"{user_id}|src={effective_source_id}|kb={int(kb_flag)}|n={lim}|{fp_prefix}|twg=1"
     hit = _cache_get(cache_key)
     if hit is not None:
         hit = dict(hit)
@@ -345,6 +345,7 @@ def build_suggested_questions(
             from data_sources.runtime import resolve_connector_for_state
             from embeddings import embed_text
             from query_kb_store import match_similar_queries_with_relaxation
+            from agents.time_window_guard import suggested_question_outside_catalog_window
 
             connector = resolve_connector_for_state(
                 {"user_id": user_id, "active_source_id": effective_source_id}
@@ -360,7 +361,11 @@ def build_suggested_questions(
                 if tag != "rpc_error" and rows:
                     for r in rows[:4]:
                         uq = (r.get("user_question") or "").strip()
-                        if uq and uq.lower() not in {c.lower() for c in context}:
+                        if (
+                            uq
+                            and uq.lower() not in {c.lower() for c in context}
+                            and not suggested_question_outside_catalog_window(uq, schema)
+                        ):
                             kb_questions.append(uq)
         except Exception:
             logger.exception("suggested_questions KB retrieval failed (non-fatal)")
@@ -411,9 +416,13 @@ def build_suggested_questions(
     try:
         from llm import get_gemini, invoke_with_retry
 
+        from agents.schema_utils import extract_data_ranges
+        from agents.time_window_guard import suggested_question_outside_catalog_window
+
         catalog = _schema_tables_summary(schema)
         columns_catalog = _schema_columns_catalog(schema)
         allowlist = _schema_allowlist(schema)
+        data_ranges_block = extract_data_ranges(schema)
 
         hist_block = "\n".join(f"- {q}" for q in context[:12]) if context else "(no prior user questions)"
         kb_block = (
@@ -436,6 +445,9 @@ Warehouse tables (high-level):
 Warehouse columns (STRICT: every breakdown, filter, or grouping in a suggestion must map to these names only; do NOT invent fields — e.g. use customers.segment not "industry", use products.category not made-up taxonomies):
 {columns_catalog}
 
+DATA AVAILABILITY (dated columns — do NOT suggest "last month", "this quarter", "last 90 days", etc. unless that window overlaps these ranges; prefer "in the sample data", "in the loaded period", or explicit calendar dates inside the min/max below):
+{data_ranges_block}
+
 Rules:
 - Output exactly {lim} suggestions in JSON field "suggestions".
 - Each item must be object: {{"question": "...", "required_fields": ["table.column", "column"]}}.
@@ -451,7 +463,9 @@ Rules:
         result = invoke_with_retry(structured, prompt)
         result_dict = result.model_dump() if hasattr(result, "model_dump") else result
         raw_list = result_dict.get("suggestions") or []
-        sug = _extract_validated_questions(raw_list, allowlist, lim)
+        sug = _extract_validated_questions(raw_list, allowlist, lim * 2)
+        sug = [q for q in sug if not suggested_question_outside_catalog_window(q, schema)]
+        sug = _clamp_suggestions(sug, lim)
         if len(sug) < max(1, lim // 2):
             seeded = _schema_seed_questions(schema, lim)
             sug = _clamp_suggestions(seeded, lim)

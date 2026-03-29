@@ -1,13 +1,10 @@
 """
 LangGraph orchestration – wires all agents into a state machine.
-Uses MemorySaver checkpointer for interrupt-based human-in-the-loop.
+Checkpointer is injected at app startup (PostgreSQL via lifespan, or MemorySaver fallback).
 """
-from typing import Literal
+from typing import Any, Literal
+
 from langgraph.graph import StateGraph, END
-try:
-    from langgraph.checkpoint.memory import MemorySaver
-except ImportError:
-    from langgraph.checkpoint.memory import InMemorySaver as MemorySaver
 
 from agents.state import DataPilotState
 from agents.query_kb import run_query_kb
@@ -42,15 +39,17 @@ def route_after_discovery(state: DataPilotState) -> Literal["optimizer_prepare",
     return "__end__"
 
 
-def route_after_optimizer_gate(state: DataPilotState) -> Literal["executor", "__end__"]:
-    """If gate promoted pending SQL (user approved), go to executor; else end."""
+def route_after_optimizer_gate(state: DataPilotState) -> Literal["executor", "optimizer_prepare", "__end__"]:
+    """Approve → executor; first decline → regenerate SQL; final decline or cancel → end."""
     if state.get("sql"):
         return "executor"
+    if (state.get("optimizer_regenerate_hint") or "").strip():
+        return "optimizer_prepare"
     return "__end__"
 
 
-def build_graph():
-    """Build and compile the DataPilot agent graph with checkpointer."""
+def build_graph(checkpointer: Any):
+    """Build and compile the DataPilot agent graph with the given checkpointer."""
     graph = StateGraph(DataPilotState)
 
     graph.add_node("query_kb", run_query_kb)
@@ -79,23 +78,39 @@ def build_graph():
     graph.add_conditional_edges(
         "optimizer_gate",
         route_after_optimizer_gate,
-        {"executor": "executor", "__end__": END},
+        {
+            "executor": "executor",
+            "optimizer_prepare": "optimizer_prepare",
+            "__end__": END,
+        },
     )
     graph.add_edge("executor", "validator")
     graph.add_edge("validator", "visualization")
     graph.add_edge("visualization", END)
 
-    memory = MemorySaver()
-    return graph.compile(checkpointer=memory)
+    # Human-in-the-loop uses interrupt() inside optimizer_gate; do not add interrupt_before
+    # for the same node or the graph would pause twice (static gate + dynamic interrupt).
+    return graph.compile(checkpointer=checkpointer)
 
 
-# Singleton compiled graph
-_graph = None
+# Set by FastAPI lifespan (Postgres) or lazy fallback (MemorySaver) for scripts/tests.
+_compiled_graph = None
+
+
+def set_compiled_graph(compiled) -> None:
+    """Replace the compiled graph (called from app lifespan after checkpointer setup)."""
+    global _compiled_graph
+    _compiled_graph = compiled
 
 
 def get_graph():
     """Return the compiled DataPilot graph with checkpointer."""
-    global _graph
-    if _graph is None:
-        _graph = build_graph()
-    return _graph
+    global _compiled_graph
+    if _compiled_graph is None:
+        try:
+            from langgraph.checkpoint.memory import MemorySaver
+        except ImportError:
+            from langgraph.checkpoint.memory import InMemorySaver as MemorySaver
+
+        _compiled_graph = build_graph(MemorySaver())
+    return _compiled_graph

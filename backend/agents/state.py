@@ -95,6 +95,9 @@ class DataPilotState(TypedDict, total=False):
     pending_execute_bytes: Optional[int]
     pending_execute_cost: Optional[float]
     pending_execute_dialect: Optional[str]
+    # Execute HITL: first decline triggers one optimizer_prepare pass with hint; second decline ends the run.
+    optimizer_decline_count: int
+    optimizer_regenerate_hint: Optional[str]
     bytes_scanned: Optional[int]  # BigQuery dry run estimate
     estimated_cost: Optional[float]  # BigQuery cost estimate (USD)
     raw_results: Optional[list[dict[str, Any]]]

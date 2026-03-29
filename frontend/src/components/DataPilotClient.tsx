@@ -74,6 +74,7 @@ interface PendingInterrupt {
   sql?: string;
   bytes_scanned?: number;
   estimated_cost?: number;
+  cost_summary?: string;
 }
 
 function titleSourceType(sourceType: string): string {
@@ -407,6 +408,7 @@ export function DataPilotClient() {
                           sql: event.sql,
                           bytes_scanned: event.bytes_scanned,
                           estimated_cost: event.estimated_cost,
+                          cost_summary: event.cost_summary as string | undefined,
                         },
                       }
                     : m
@@ -474,6 +476,7 @@ export function DataPilotClient() {
                           sql: event.sql,
                           bytes_scanned: event.bytes_scanned,
                           estimated_cost: event.estimated_cost,
+                          cost_summary: event.cost_summary as string | undefined,
                         },
                       }
                     : m
@@ -670,6 +673,7 @@ export function DataPilotClient() {
                           sql: event.sql,
                           bytes_scanned: event.bytes_scanned,
                           estimated_cost: event.estimated_cost,
+                          cost_summary: event.cost_summary as string | undefined,
                         },
                       }
                     : m
@@ -743,6 +747,7 @@ export function DataPilotClient() {
                           sql: event.sql,
                           bytes_scanned: event.bytes_scanned,
                           estimated_cost: event.estimated_cost,
+                          cost_summary: event.cost_summary as string | undefined,
                         },
                       }
                     : m
@@ -947,6 +952,7 @@ export function DataPilotClient() {
                                     sql: message.pendingInterrupt.sql,
                                     bytes_scanned: message.pendingInterrupt.bytes_scanned,
                                     estimated_cost: message.pendingInterrupt.estimated_cost,
+                                    cost_summary: message.pendingInterrupt.cost_summary,
                                   }
                                 : undefined
                             }
