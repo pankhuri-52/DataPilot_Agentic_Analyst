@@ -4,11 +4,103 @@ Checks data availability early: if the user asks for a time period outside the d
 stops and asks if they want to proceed with the available range instead.
 """
 import json
+import re
 from llm import get_gemini, invoke_with_retry
 from agents.state import AnalysisPlan, TraceEntry
 from agents.trace_stream import append_trace
 from agents.context import get_effective_schema
 from agents.schema_utils import extract_data_ranges
+
+_SCHEMA_INTROSPECTION_PATTERNS = re.compile(
+    r"\b("
+    r"what (data|tables?|columns?|fields?|information|metrics?|dimensions?|schema)"
+    r"|what can (you|i|we) (tell|see|find|ask|query|analyze|do)"
+    r"|what('?s| is) (available|in (the |this )?(data|database|db|warehouse|dataset))"
+    r"|show (me )?(the )?(tables?|schema|columns?|available data|data structure)"
+    r"|list (the )?(tables?|columns?|schema|available)"
+    r"|describe (the )?(data|tables?|schema|database|warehouse)"
+    r"|what kind(s)? of"
+    r"|what do (you|we) have"
+    r"|how is (the )?data (structured|organized)"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _is_schema_introspection_query(query: str) -> bool:
+    """Return True when the user is asking about data structure/availability, not analytics."""
+    return bool(_SCHEMA_INTROSPECTION_PATTERNS.search(query.strip()))
+
+
+def _build_schema_markdown(schema: dict) -> str:
+    """Build a human-readable markdown summary of the connected schema."""
+    lines: list[str] = []
+    tables = schema.get("tables") or []
+    source_kind = (schema.get("source_kind") or "").strip().lower()
+    db_label = "spreadsheet" if source_kind in ("user_csv", "csv_upload") else "warehouse"
+
+    lines.append(f"Here's what's available in your connected {db_label}:\n")
+
+    if not tables:
+        lines.append("_No tables found in the connected data source._")
+        return "\n".join(lines)
+
+    for t in tables:
+        if not isinstance(t, dict):
+            continue
+        name = (t.get("name") or "").strip()
+        if not name:
+            continue
+        desc = (t.get("description") or "").strip()
+        row_count = t.get("row_count")
+        count_str = f" · {row_count:,} rows" if isinstance(row_count, int) and row_count > 0 else ""
+        header = f"**{name}**{count_str}"
+        if desc:
+            header += f" — {desc}"
+        lines.append(f"### {header}")
+
+        cols = t.get("columns") or []
+        if cols:
+            col_lines: list[str] = []
+            for c in cols:
+                if not isinstance(c, dict):
+                    continue
+                cn = (c.get("name") or "").strip()
+                ct = (c.get("type") or c.get("data_type") or "").strip()
+                cdesc = (c.get("description") or "").strip()
+                if not cn:
+                    continue
+                col_entry = f"- `{cn}`"
+                if ct:
+                    col_entry += f" _{ct}_"
+                if cdesc:
+                    col_entry += f" — {cdesc}"
+                col_lines.append(col_entry)
+            lines.extend(col_lines)
+        lines.append("")
+
+    relationships = schema.get("relationships") or []
+    if relationships:
+        lines.append("**Relationships:**")
+        for rel in relationships:
+            if not isinstance(rel, dict):
+                continue
+            fk = rel.get("from_table", "?")
+            fc = rel.get("from_column", "?")
+            tt = rel.get("to_table", "?")
+            tc = rel.get("to_column", "?")
+            lines.append(f"- `{fk}.{fc}` → `{tt}.{tc}`")
+        lines.append("")
+
+    lines.append("You can ask me anything about this data — for example:")
+    table_names = [t["name"] for t in tables if isinstance(t, dict) and t.get("name")]
+    if table_names:
+        first = table_names[0]
+        lines.append(f'- "How many rows are in {first}?"')
+        lines.append(f'- "Show me the top 10 records from {first}"')
+    lines.append('- "What are total sales by region?"')
+
+    return "\n".join(lines)
 
 EXECUTION_PHASE_ORDER = (
     "planner",
@@ -222,6 +314,33 @@ def run_planner(state: dict) -> dict:
                 clarifying_questions=["Please enter a question about your data (e.g. sales, revenue, orders)."],
                 execution_steps=[],
             ).model_dump(),
+            "trace": trace,
+        }
+
+    # ── Schema introspection short-circuit ──────────────────────────────────────
+    if _is_schema_introspection_query(query):
+        schema = get_effective_schema(state)
+        summary = _build_schema_markdown(schema)
+        append_trace(
+            trace,
+            TraceEntry(
+                agent="planner",
+                status="success",
+                message="Schema introspection — returning data structure summary",
+            ).model_dump(),
+        )
+        return {
+            "plan": AnalysisPlan(
+                metrics=[],
+                dimensions=[],
+                filters={},
+                is_valid=False,
+                query_scope="schema_introspection",
+                clarifying_questions=[],
+                execution_steps=[],
+            ).model_dump(),
+            "explanation": summary,
+            "answer_summary": "Here's the structure of your connected data.",
             "trace": trace,
         }
 

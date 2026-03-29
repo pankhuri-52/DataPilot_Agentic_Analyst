@@ -16,6 +16,17 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion";
+import { Button } from "@/components/ui/button";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { formatExecutedAtLabel } from "@/lib/formatExecutedAt";
 import { cn } from "@/lib/utils";
 
 export const EXECUTION_PHASE_ORDER = [
@@ -279,7 +290,7 @@ function useStaggeredSubstepReveal(
       return;
     }
 
-    const stepMs = phaseStatus === "done" ? 180 : 240;
+    const stepMs = phaseStatus === "done" ? 360 : 480;
     const id = window.setInterval(() => {
       step += 1;
       visibleCountRef.current = step;
@@ -319,10 +330,9 @@ function SubstepDot({ state }: { state: "done" | "active" | "error" }) {
       className={cn(
         "flex size-5 shrink-0 items-center justify-center rounded-full border-2 bg-card",
         // Active: primary border + soft glow ring
-        state === "active" &&
-          "border-primary/60 shadow-[0_0_0_3px_hsl(var(--primary)/0.12)]",
-        // Done: emerald border
-        state === "done" && "border-emerald-500/40 dark:border-emerald-400/35",
+        state === "active" && "border-primary/55 shadow-[0_0_0_3px_hsl(var(--primary)/0.1)]",
+        // Done: success border
+        state === "done" && "border-success/45",
         // Error: destructive border
         state === "error" && "border-destructive/50"
       )}
@@ -331,7 +341,7 @@ function SubstepDot({ state }: { state: "done" | "active" | "error" }) {
         <AlertCircle className="size-3 text-destructive" aria-hidden />
       )}
       {state === "done" && (
-        <Check className="size-3 text-emerald-600 dark:text-emerald-400" aria-hidden />
+        <Check className="size-3 text-success" aria-hidden />
       )}
       {state === "active" && (
         <Loader2
@@ -387,7 +397,7 @@ function PhaseSubstepsTimeline({
             />
           </div>
           <p className="pt-0.5 text-[11px] leading-snug text-muted-foreground">
-            Starting…
+            Waiting for live progress updates...
           </p>
         </div>
       )}
@@ -419,6 +429,12 @@ function PhaseSubstepsTimeline({
               )}
             >
               {msg}
+              {rs === "active" && (
+                <span className="ml-2 inline-flex items-center gap-1 text-[10px] font-normal text-muted-foreground">
+                  <span className="size-1.5 animate-pulse rounded-full bg-primary" />
+                  Processing
+                </span>
+              )}
             </p>
           </div>
         );
@@ -462,7 +478,7 @@ function PhaseStatusIcon({ status }: { status: PhaseStepStatus }) {
   if (status === "done") {
     return (
       <Check
-        className="size-5 shrink-0 text-emerald-600 dark:text-emerald-400"
+        className="size-5 shrink-0 text-success"
         aria-hidden
       />
     );
@@ -485,7 +501,15 @@ export interface ExecutionPlanPanelProps {
   liveTrace: TraceEntry[];
   isLoading: boolean;
   isTurnComplete: boolean;
-  pendingInterrupt?: { reason: string; data?: Record<string, unknown> };
+  pendingInterrupt?: {
+    reason: string;
+    data?: Record<string, unknown>;
+    sql?: string;
+    bytes_scanned?: number;
+    estimated_cost?: number;
+  };
+  onContinue?: (value: unknown) => void;
+  continueDisabled?: boolean;
 }
 
 export function ExecutionPlanPanel({
@@ -494,6 +518,8 @@ export function ExecutionPlanPanel({
   isLoading,
   isTurnComplete,
   pendingInterrupt,
+  onContinue,
+  continueDisabled,
 }: ExecutionPlanPanelProps) {
   const steps = useMemo(() => normalizeExecutionSteps(plan), [plan]);
   const [panelCollapsed, setPanelCollapsed] = useState(false);
@@ -585,8 +611,8 @@ export function ExecutionPlanPanel({
       className={cn(
         "rounded-xl border transition-[box-shadow,background-color,border-color] duration-200",
         runNeedsAttention
-          ? "relative z-[2] border-primary/50 bg-primary/[0.07] shadow-md ring-2 ring-primary/25 dark:border-primary/45 dark:bg-primary/12 dark:ring-primary/30"
-          : "border-border bg-card/50"
+          ? "relative z-[2] border-primary/30 bg-card shadow-md ring-1 ring-primary/15"
+          : "border-border bg-card/50 shadow-sm"
       )}
       aria-busy={runNeedsAttention ? true : undefined}
       aria-live={runNeedsAttention ? "polite" : undefined}
@@ -599,8 +625,8 @@ export function ExecutionPlanPanel({
           className="flex w-full cursor-pointer items-center gap-3 rounded-xl px-4 py-3 text-left transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           <ChevronRight className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-          <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-emerald-500/15">
-            <Check className="size-4 text-emerald-600 dark:text-emerald-400" aria-hidden />
+          <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-success/15">
+            <Check className="size-4 text-success" aria-hidden />
           </div>
           <div className="min-w-0 flex-1">
             <p className="text-sm font-medium">Analysis complete</p>
@@ -749,6 +775,147 @@ export function ExecutionPlanPanel({
                                 <p className="mt-2 whitespace-pre-wrap text-xs text-muted-foreground">
                                   {detail}
                                 </p>
+                              )}
+
+                              {/* Inline interrupt UI — execute_query (optimizer phase) */}
+                              {status === "awaiting" && ph === "optimizer" && awaitingExecute && pendingInterrupt && onContinue && (
+                                <div className="mt-3 space-y-3">
+                                    <Alert className="rounded-lg border-primary/35 bg-primary/5">
+                                    <AlertTitle>Confirmation needed</AlertTitle>
+                                    <AlertDescription>
+                                      The run pauses here until you approve running the query against your warehouse. Review SQL and estimated cost (if shown), then choose Yes or No.
+                                    </AlertDescription>
+                                  </Alert>
+                                  <div className="rounded-lg border border-primary/30 bg-accent/20 p-4 space-y-3">
+                                    <p className="text-xs font-medium">Query ready to execute</p>
+                                    {(() => {
+                                      const sql = pendingInterrupt.sql ?? (pendingInterrupt.data?.sql as string | undefined);
+                                      const bytes = pendingInterrupt.bytes_scanned ?? (pendingInterrupt.data?.bytes_scanned as number | undefined);
+                                      const cost = pendingInterrupt.estimated_cost ?? (pendingInterrupt.data?.estimated_cost as number | undefined);
+                                      return (
+                                        <>
+                                          {!sql && (
+                                            <p className="text-xs text-warning">
+                                              SQL preview was not included in the response. You can still try Yes to continue, or No to cancel.
+                                            </p>
+                                          )}
+                                          {sql && (
+                                            <pre className="text-[11px] overflow-x-auto rounded bg-muted/50 p-2 max-h-32">
+                                              {sql}
+                                            </pre>
+                                          )}
+                                          {(bytes != null || cost != null) && (
+                                            <p className="text-xs text-muted-foreground">
+                                              {bytes != null && `~${(bytes / (1024 * 1024)).toFixed(2)} MB scanned`}
+                                              {cost != null && ` · ~$${cost.toFixed(6)} estimated cost`}
+                                            </p>
+                                          )}
+                                          <p className="text-xs text-muted-foreground">Execute this query?</p>
+                                        </>
+                                      );
+                                    })()}
+                                    <div className="flex gap-2">
+                                      <Button size="sm" className="cursor-pointer" disabled={continueDisabled} onClick={() => onContinue(true)}>
+                                        Yes
+                                      </Button>
+                                      <Button size="sm" variant="outline" className="cursor-pointer" disabled={continueDisabled} onClick={() => onContinue(false)}>
+                                        No
+                                      </Button>
+                                    </div>
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* Inline interrupt UI — query_cache_hit (planner phase) */}
+                              {status === "awaiting" && ph === "planner" && awaitingQueryCache && pendingInterrupt && onContinue && (
+                                <div className="mt-3 space-y-3">
+                                  <Alert className="rounded-lg border-primary/40 bg-primary/5">
+                                    <AlertTitle>Confirmation needed</AlertTitle>
+                                    <AlertDescription>
+                                      We found a similar question you asked before. Review the saved SQL and sample results, then choose Re-run (full new analysis) or Adapt (re-run the saved query on your warehouse).
+                                    </AlertDescription>
+                                  </Alert>
+                                  <div className="rounded-lg border border-primary/30 bg-accent/20 p-4 space-y-3">
+                                    <p className="text-xs font-medium">Similar question in your knowledge base</p>
+                                    <p className="text-xs text-muted-foreground leading-relaxed">
+                                      We&apos;ve answered something similar before. Here&apos;s the cached SQL + result sample
+                                      {(() => {
+                                        const iso = (pendingInterrupt.data?.executed_at as string | undefined) || "";
+                                        const label = formatExecutedAtLabel(iso);
+                                        return label ? ` from ${label}` : "";
+                                      })()}
+                                      . <span className="font-medium">Re-run</span> runs the full analysis pipeline; <span className="font-medium">Adapt</span> reuses this SQL against your warehouse.
+                                    </p>
+                                    {(() => {
+                                      const matched = (pendingInterrupt.data?.matched_question as string | undefined)?.trim() || "";
+                                      const sim = pendingInterrupt.data?.similarity as number | undefined;
+                                      return matched ? (
+                                        <p className="text-[11px] text-muted-foreground">
+                                          Matched question: <span className="text-foreground">{matched}</span>
+                                          {sim != null && !Number.isNaN(Number(sim)) && (
+                                            <span className="ml-2">· similarity {Number(sim).toFixed(2)}</span>
+                                          )}
+                                        </p>
+                                      ) : null;
+                                    })()}
+                                    {(() => {
+                                      const sql = pendingInterrupt.sql ?? (pendingInterrupt.data?.sql as string | undefined);
+                                      const preview = pendingInterrupt.data?.result_preview as { rows?: Record<string, unknown>[]; row_count?: number } | undefined;
+                                      const rows = Array.isArray(preview?.rows) ? preview.rows : [];
+                                      const rowCount = typeof preview?.row_count === "number" ? preview.row_count : rows.length;
+                                      return (
+                                        <>
+                                          {sql && (
+                                            <pre className="text-[11px] overflow-x-auto rounded bg-muted/50 p-2 max-h-32">
+                                              {sql}
+                                            </pre>
+                                          )}
+                                          {rows.length > 0 && (
+                                            <div className="space-y-1">
+                                              <p className="text-[11px] text-muted-foreground">
+                                                Sample results ({rowCount} row{rowCount === 1 ? "" : "s"} total)
+                                              </p>
+                                              <div className="max-h-28 overflow-auto rounded-lg border border-border/70 text-[10px]">
+                                                <Table>
+                                                  <TableHeader className="bg-muted/30">
+                                                    <TableRow>
+                                                      {Object.keys(rows[0]).map((k) => (
+                                                        <TableHead key={k} className="h-auto px-2 py-1 text-[10px] font-medium">
+                                                          {k}
+                                                        </TableHead>
+                                                      ))}
+                                                    </TableRow>
+                                                  </TableHeader>
+                                                  <TableBody>
+                                                    {rows.slice(0, 5).map((row, i) => (
+                                                      <TableRow key={i}>
+                                                        {Object.values(row).map((v, j) => (
+                                                          <TableCell key={j} className="max-w-[120px] px-2 py-0.5 text-[10px]">
+                                                            <span className="block truncate">
+                                                              {v === null || v === undefined ? "" : String(v)}
+                                                            </span>
+                                                          </TableCell>
+                                                        ))}
+                                                      </TableRow>
+                                                    ))}
+                                                  </TableBody>
+                                                </Table>
+                                              </div>
+                                            </div>
+                                          )}
+                                        </>
+                                      );
+                                    })()}
+                                    <div className="flex flex-wrap gap-2 pt-1">
+                                      <Button size="sm" className="cursor-pointer" disabled={continueDisabled} onClick={() => onContinue({ queryCache: "full_pipeline" })}>
+                                        Re-run
+                                      </Button>
+                                      <Button size="sm" variant="secondary" className="cursor-pointer" disabled={continueDisabled} onClick={() => onContinue({ queryCache: "use_cached_sql" })}>
+                                        Adapt
+                                      </Button>
+                                    </div>
+                                  </div>
+                                </div>
                               )}
                             </AccordionContent>
                           </>

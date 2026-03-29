@@ -11,7 +11,6 @@ import {
   type CSSProperties,
 } from "react";
 import { cn } from "@/lib/utils";
-import { appTopHeaderStripClass } from "@/lib/appTopHeaderClasses";
 import {
   MessageSquarePlus,
   MessageSquare,
@@ -26,7 +25,6 @@ import {
   ChevronDown,
   AlertCircle,
   Pin,
-  PinOff,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { CONVERSATIONS_UI_MAX, useChat } from "@/contexts/ChatContext";
@@ -34,22 +32,33 @@ import { useAppMainHeader } from "@/contexts/AppMainHeaderContext";
 import { ThemeToggleButton } from "@/components/ThemeToggleButton";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
+import { Skeleton } from "@/components/ui/skeleton";
 
 const SIDEBAR_STORAGE_KEY = "datapilot_sidebar_collapsed";
 const CHATS_SECTION_STORAGE_KEY = "datapilot_sidebar_chats_expanded";
-const CHATS_PIN_STORAGE_KEY = "datapilot_sidebar_chats_pinned";
 const SIDEBAR_WIDTH_STORAGE_KEY = "datapilot_sidebar_width_px";
+const PINNED_CHATS_STORAGE_KEY = "datapilot_sidebar_pinned_chat_ids";
 const SIDEBAR_WIDTH_DEFAULT = 224; /* 14rem */
 const SIDEBAR_WIDTH_MIN = 192; /* 12rem */
 const SIDEBAR_WIDTH_MAX = 384; /* 24rem */
 const SIDEBAR_NAV_ITEM_BASE =
-  "flex w-full min-h-[36px] items-center gap-3 rounded-lg px-2.5 text-[13px] font-medium transition-colors duration-150";
+  "flex w-full min-h-[36px] items-center gap-3 rounded-xl px-2.5 text-[13px] font-medium transition-colors duration-150";
 const SIDEBAR_NAV_ITEM_ACTIVE =
   "bg-sidebar-accent text-sidebar-accent-foreground";
 const SIDEBAR_NAV_ITEM_IDLE =
   "text-muted-foreground hover:bg-sidebar-accent/70 hover:text-sidebar-foreground";
 const SIDEBAR_SECTION_LABEL =
   "px-2.5 pb-1 pt-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/75";
+
+function avatarToneClass(s: string): string {
+  let sum = 0;
+  for (let i = 0; i < s.length; i++) sum += s.charCodeAt(i);
+  return sum % 2 === 0
+    ? "bg-primary text-primary-foreground"
+    : "bg-secondary text-secondary-foreground";
+}
 
 function getUserDisplayName(name?: string, email?: string) {
   const trimmedName = name?.trim();
@@ -75,9 +84,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [chatsExpanded, setChatsExpanded] = useState(false);
-  const [chatsPinned, setChatsPinned] = useState(false);
   const [sidebarWidthPx, setSidebarWidthPx] = useState(SIDEBAR_WIDTH_DEFAULT);
   const [isResizing, setIsResizing] = useState(false);
+  const [pinnedChatIds, setPinnedChatIds] = useState<Set<string>>(new Set());
   const resizeDragRef = useRef<{ startX: number; startW: number } | null>(null);
   const latestWidthRef = useRef(SIDEBAR_WIDTH_DEFAULT);
 
@@ -85,9 +94,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     try {
       const v = localStorage.getItem(SIDEBAR_STORAGE_KEY);
       if (v === "1") setSidebarCollapsed(true);
-    } catch {
-      /* ignore */
-    }
+    } catch { /* ignore */ }
   }, []);
 
   useEffect(() => {
@@ -99,9 +106,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       const clamped = Math.min(SIDEBAR_WIDTH_MAX, Math.max(SIDEBAR_WIDTH_MIN, n));
       setSidebarWidthPx(clamped);
       latestWidthRef.current = clamped;
-    } catch {
-      /* ignore */
-    }
+    } catch { /* ignore */ }
   }, []);
 
   useEffect(() => {
@@ -112,28 +117,22 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     try {
       const v = localStorage.getItem(CHATS_SECTION_STORAGE_KEY);
       if (v === "1") setChatsExpanded(true);
-    } catch {
-      /* ignore */
-    }
+    } catch { /* ignore */ }
   }, []);
 
   useEffect(() => {
     try {
-      const v = localStorage.getItem(CHATS_PIN_STORAGE_KEY);
-      if (v === "1") setChatsPinned(true);
-    } catch {
-      /* ignore */
-    }
+      const raw = localStorage.getItem(PINNED_CHATS_STORAGE_KEY);
+      if (!raw) return;
+      const ids = JSON.parse(raw) as string[];
+      if (Array.isArray(ids)) setPinnedChatIds(new Set(ids));
+    } catch { /* ignore */ }
   }, []);
 
   const toggleSidebar = useCallback(() => {
     setSidebarCollapsed((c) => {
       const next = !c;
-      try {
-        localStorage.setItem(SIDEBAR_STORAGE_KEY, next ? "1" : "0");
-      } catch {
-        /* ignore */
-      }
+      try { localStorage.setItem(SIDEBAR_STORAGE_KEY, next ? "1" : "0"); } catch { /* ignore */ }
       return next;
     });
   }, []);
@@ -141,23 +140,22 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const toggleChatsSection = useCallback(() => {
     setChatsExpanded((e) => {
       const next = !e;
-      try {
-        localStorage.setItem(CHATS_SECTION_STORAGE_KEY, next ? "1" : "0");
-      } catch {
-        /* ignore */
-      }
+      try { localStorage.setItem(CHATS_SECTION_STORAGE_KEY, next ? "1" : "0"); } catch { /* ignore */ }
       return next;
     });
   }, []);
 
-  const toggleChatsPinned = useCallback(() => {
-    setChatsPinned((p) => {
-      const next = !p;
-      try {
-        localStorage.setItem(CHATS_PIN_STORAGE_KEY, next ? "1" : "0");
-      } catch {
-        /* ignore */
+  const togglePinChat = useCallback((chatId: string) => {
+    setPinnedChatIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(chatId)) {
+        next.delete(chatId);
+      } else {
+        next.add(chatId);
       }
+      try {
+        localStorage.setItem(PINNED_CHATS_STORAGE_KEY, JSON.stringify(Array.from(next)));
+      } catch { /* ignore */ }
       return next;
     });
   }, []);
@@ -182,10 +180,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       root.style.removeProperty("--app-chrome-header-h");
     };
   }, []);
+
   const {
     startNewChat,
     conversations,
-    conversationsTotal,
     currentConversationId,
     loadConversation,
     conversationsError,
@@ -194,6 +192,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   const userDisplayName = getUserDisplayName(user?.name, user?.email);
   const userInitials = getUserInitials(user?.name, user?.email);
+  const avatarColor = avatarToneClass(user?.email ?? user?.name ?? "DP");
 
   const handleNewChat = () => {
     startNewChat();
@@ -218,141 +217,203 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     const drag = resizeDragRef.current;
     if (!drag) return;
     const dx = e.clientX - drag.startX;
-    const next = Math.min(
-      SIDEBAR_WIDTH_MAX,
-      Math.max(SIDEBAR_WIDTH_MIN, drag.startW + dx)
-    );
+    const next = Math.min(SIDEBAR_WIDTH_MAX, Math.max(SIDEBAR_WIDTH_MIN, drag.startW + dx));
     latestWidthRef.current = next;
     setSidebarWidthPx(next);
   }, []);
 
   const onSidebarResizePointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (resizeDragRef.current) {
-      try {
-        localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(latestWidthRef.current));
-      } catch {
-        /* ignore */
-      }
+      try { localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(latestWidthRef.current)); } catch { /* ignore */ }
     }
     resizeDragRef.current = null;
     setIsResizing(false);
-    try {
-      e.currentTarget.releasePointerCapture(e.pointerId);
-    } catch {
-      /* already released */
-    }
+    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* already released */ }
   }, []);
 
   const onSidebarResizePointerCancel = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     resizeDragRef.current = null;
     setIsResizing(false);
-    try {
-      e.currentTarget.releasePointerCapture(e.pointerId);
-    } catch {
-      /* ignore */
-    }
+    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
   }, []);
+
+  const pinnedConversations = conversations.filter((c) => pinnedChatIds.has(c.id));
+  const recentConversations = conversations.filter((c) => !pinnedChatIds.has(c.id));
+
+  function ChatItemRow({
+    id,
+    title,
+    selected,
+    showPinIcon,
+  }: {
+    id: string;
+    title: string;
+    selected: boolean;
+    showPinIcon: boolean;
+  }) {
+    const isPinned = pinnedChatIds.has(id);
+    return (
+      <div className="group relative flex items-center">
+        <button
+          type="button"
+          onClick={() => {
+            if (id === currentConversationId && pathname === "/") return;
+            loadConversation(id);
+            if (pathname !== "/") router.push("/");
+          }}
+          className={cn(
+            "flex flex-1 cursor-pointer items-center rounded-xl px-2.5 py-1.5 text-left text-[12px] transition-colors duration-150",
+            selected
+              ? "bg-sidebar-accent text-sidebar-accent-foreground"
+              : "text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
+          )}
+        >
+          <span className="min-w-0 flex-1 truncate pr-1">{title || "Untitled"}</span>
+        </button>
+        {showPinIcon && (
+          <div
+            className={cn(
+              "absolute inset-y-0 right-0 flex items-center transition-opacity duration-150",
+              isPinned ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+            )}
+          >
+            <span
+              className={cn(
+                "pointer-events-none h-full w-6 bg-gradient-to-l",
+                selected
+                  ? "from-sidebar-accent"
+                  : "from-sidebar group-hover:from-sidebar-accent/60"
+              )}
+              aria-hidden
+            />
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                togglePinChat(id);
+              }}
+              className={cn(
+                "flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-lg transition-colors",
+                selected ? "bg-sidebar-accent" : "bg-sidebar group-hover:bg-sidebar-accent/60",
+                isPinned
+                  ? "text-primary hover:text-primary/80"
+                  : "text-muted-foreground hover:text-primary"
+              )}
+              aria-label={isPinned ? "Unpin chat" : "Pin chat"}
+            >
+              <Pin
+                className={cn(
+                  "size-3.5",
+                  isPinned && "fill-current"
+                )}
+                aria-hidden
+              />
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div
       className="flex h-svh min-h-0 overflow-hidden"
-      style={
-        {
-          ["--sidebar-width" as string]: sidebarWidth,
-        } as CSSProperties
-      }
+      style={{ ["--sidebar-width" as string]: sidebarWidth } as CSSProperties}
     >
+      {/* ── Fixed top chrome header (main content only) ── */}
       <div
         ref={appChromeHeaderRef}
         className={cn(
-          "fixed left-0 right-0 top-0 z-[70] grid items-stretch",
-          appTopHeaderStripClass
+          "fixed left-[var(--sidebar-width)] right-0 top-0 z-[70] border-b border-border/70 bg-background/92 shadow-xs backdrop-blur supports-[backdrop-filter]:bg-background/78",
+          !isResizing && "transition-[left] duration-200 ease-out"
         )}
-        style={{
-          gridTemplateColumns: "var(--sidebar-width) minmax(0, 1fr)",
-        }}
       >
-        <div
-          className={cn(
-            "flex min-w-0 border-r [border-right-color:var(--app-header-strip-border)]",
-            sidebarCollapsed
-              ? "items-center justify-center px-2 py-2.5"
-              : "items-start gap-3 px-3.5 py-2.5"
-          )}
-        >
-          {!sidebarCollapsed && (
-            <>
-              <div className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary-foreground/18 text-[12px] font-semibold tracking-wide text-foreground dark:bg-primary-foreground/12">
-                DP
-              </div>
-              <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-1">
-                <p className="m-0 truncate font-display text-sm font-semibold leading-tight tracking-tight text-foreground">
-                  DataPilot
-                </p>
-                <p className="m-0 truncate text-[12px] leading-snug text-foreground/90">
-                  Analytics workspace
-                </p>
-              </div>
-            </>
-          )}
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            onClick={toggleSidebar}
-            className={cn(
-              "size-9 shrink-0 cursor-pointer rounded-lg text-foreground/85 hover:bg-primary-foreground/20 hover:text-foreground dark:hover:bg-primary-foreground/15",
-              !sidebarCollapsed && "mt-0.5"
-            )}
-            aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-          >
-            {sidebarCollapsed ? (
-              <ChevronRight className="size-5" aria-hidden />
-            ) : (
-              <ChevronLeft className="size-5" aria-hidden />
-            )}
-          </Button>
-        </div>
-        <div className="flex min-w-0 items-start justify-between gap-3 px-3 py-2.5 sm:px-6">
-          <div className="flex min-w-0 flex-1 flex-col gap-1 overflow-visible py-0.5">
+        <div className="flex min-h-[3.75rem] min-w-0 items-center justify-between gap-3 px-4 py-2.5 sm:px-6">
+          <div className="flex min-w-0 flex-1 flex-col gap-1 overflow-visible">
             {mainHeader ? (
               <>
                 <h1 className="m-0 break-words font-display text-base font-semibold leading-snug tracking-tight text-foreground sm:text-lg sm:leading-snug">
                   {mainHeader.title}
                 </h1>
                 {mainHeader.description ? (
-                  <p className="m-0 text-[12px] leading-snug text-foreground/90 sm:text-[13px] sm:leading-snug">
+                  <p className="m-0 text-[12px] leading-snug text-muted-foreground sm:text-[13px] sm:leading-snug">
                     {mainHeader.description}
                   </p>
                 ) : null}
               </>
             ) : (
-              <p className="m-0 font-display text-sm font-semibold leading-tight text-foreground/40">
+              <p className="m-0 font-display text-sm font-semibold leading-tight text-foreground/45">
                 DataPilot
               </p>
             )}
           </div>
-          <ThemeToggleButton className="mt-0.5 size-9 shrink-0 text-foreground/85 hover:bg-primary-foreground/20 hover:text-foreground dark:text-foreground/90 dark:hover:bg-primary-foreground/15" />
+          <ThemeToggleButton className="size-9 shrink-0 rounded-xl text-muted-foreground hover:bg-accent hover:text-accent-foreground" />
         </div>
       </div>
 
+      {/* ── Sidebar ── */}
       <aside
         className={cn(
-          "fixed left-0 z-30 flex w-[var(--sidebar-width)] flex-col overflow-hidden border-r border-sidebar-border bg-sidebar/95 backdrop-blur supports-[backdrop-filter]:bg-sidebar/80",
-          "top-[max(5.25rem,var(--app-chrome-header-h))] h-[calc(100svh-max(5.25rem,var(--app-chrome-header-h)))]",
+          "fixed left-0 top-0 z-40 flex h-svh w-[var(--sidebar-width)] flex-col overflow-hidden border-r border-sidebar-border bg-sidebar/95 shadow-lg backdrop-blur supports-[backdrop-filter]:bg-sidebar/82",
           !isResizing && "transition-[width] duration-200 ease-out"
         )}
       >
+        <div
+          className={cn(
+            "min-h-[var(--app-chrome-header-h,3.75rem)] border-b border-sidebar-border/80",
+            sidebarCollapsed ? "px-2 py-2.5" : "px-3 py-2.5"
+          )}
+        >
+          <div className={cn("flex items-center gap-2.5", sidebarCollapsed && "justify-center")}>
+            {!sidebarCollapsed && (
+              <>
+                <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-sidebar-primary/15 text-[12px] font-semibold tracking-wide text-sidebar-primary">
+                  DP
+                </div>
+                <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                  <p className="m-0 truncate font-display text-sm font-semibold tracking-tight text-sidebar-foreground">
+                    DataPilot
+                  </p>
+                  <p className="m-0 truncate text-[11px] text-muted-foreground">Workspace</p>
+                </div>
+              </>
+            )}
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    onClick={toggleSidebar}
+                    className="size-9 shrink-0 cursor-pointer rounded-xl text-muted-foreground hover:bg-sidebar-accent/65 hover:text-sidebar-accent-foreground"
+                    aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+                  >
+                    {sidebarCollapsed ? (
+                      <ChevronRight className="size-5" aria-hidden />
+                    ) : (
+                      <ChevronLeft className="size-5" aria-hidden />
+                    )}
+                  </Button>
+                }
+              />
+              <TooltipContent side="right">
+                {sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+              </TooltipContent>
+            </Tooltip>
+          </div>
+        </div>
+
         <nav className="flex min-h-0 flex-1 flex-col px-2 py-3">
           <div className="flex min-h-0 flex-1 flex-col gap-3">
+
+            {/* ── Navigation items ── */}
             <div className="shrink-0 space-y-0.5">
-              {!sidebarCollapsed && (
+              {!sidebarCollapsed ? (
                 <div className="space-y-0.5">
-                  <p className={SIDEBAR_SECTION_LABEL}>Workspace</p>
                   <button
                     type="button"
                     onClick={handleNewChat}
-                    title="New chat"
                     className={cn(
                       SIDEBAR_NAV_ITEM_BASE,
                       "cursor-pointer justify-start",
@@ -364,7 +425,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                   </button>
                   <Link
                     href="/sources"
-                    title="Data Sources"
                     className={cn(
                       SIDEBAR_NAV_ITEM_BASE,
                       "justify-start",
@@ -372,85 +432,73 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                     )}
                   >
                     <Database className="size-[1.125rem] shrink-0" aria-hidden />
-                    <span className="truncate">Data Sources</span>
+                    <span className="truncate">Data sources</span>
                   </Link>
                   <Link
                     href="/most-asked"
-                    title="Most Asked"
                     className={cn(
                       SIDEBAR_NAV_ITEM_BASE,
                       "justify-start",
-                      pathname === "/most-asked"
-                        ? SIDEBAR_NAV_ITEM_ACTIVE
-                        : SIDEBAR_NAV_ITEM_IDLE
+                      pathname === "/most-asked" ? SIDEBAR_NAV_ITEM_ACTIVE : SIDEBAR_NAV_ITEM_IDLE
                     )}
                   >
                     <TrendingUp className="size-[1.125rem] shrink-0" aria-hidden />
-                    <span className="truncate">Most Asked</span>
+                    <span className="truncate">Most asked</span>
                   </Link>
                 </div>
-              )}
-
-              {sidebarCollapsed && (
+              ) : (
                 <div className="flex flex-col gap-0.5 px-0.5">
-                  <button
-                    type="button"
-                    onClick={handleNewChat}
-                    title="New chat"
-                    className={cn(
-                      SIDEBAR_NAV_ITEM_BASE,
-                      "cursor-pointer justify-center px-0",
-                      pathname === "/" ? SIDEBAR_NAV_ITEM_ACTIVE : SIDEBAR_NAV_ITEM_IDLE
-                    )}
-                  >
-                    <MessageSquarePlus className="size-[1.125rem] shrink-0" aria-hidden />
-                  </button>
-                  <Link
-                    href="/sources"
-                    title="Data Sources"
-                    className={cn(
-                      SIDEBAR_NAV_ITEM_BASE,
-                      "justify-center px-0",
-                      pathname === "/sources" ? SIDEBAR_NAV_ITEM_ACTIVE : SIDEBAR_NAV_ITEM_IDLE
-                    )}
-                  >
-                    <Database className="size-[1.125rem] shrink-0" aria-hidden />
-                  </Link>
-                  <Link
-                    href="/most-asked"
-                    title="Most Asked"
-                    className={cn(
-                      SIDEBAR_NAV_ITEM_BASE,
-                      "justify-center px-0",
-                      pathname === "/most-asked"
-                        ? SIDEBAR_NAV_ITEM_ACTIVE
-                        : SIDEBAR_NAV_ITEM_IDLE
-                    )}
-                  >
-                    <TrendingUp className="size-[1.125rem] shrink-0" aria-hidden />
-                  </Link>
-                  <Link
-                    href="/chats"
-                    title="All chats"
-                    className={cn(
-                      SIDEBAR_NAV_ITEM_BASE,
-                      "justify-center px-0",
-                      pathname === "/chats" ? SIDEBAR_NAV_ITEM_ACTIVE : SIDEBAR_NAV_ITEM_IDLE
-                    )}
-                  >
-                    <MessageSquare className="size-[1.125rem] shrink-0" aria-hidden />
-                  </Link>
+                  {[
+                    { href: "/", icon: MessageSquarePlus, label: "New chat", onClick: handleNewChat },
+                    { href: "/sources", icon: Database, label: "Data sources" },
+                    { href: "/most-asked", icon: TrendingUp, label: "Most asked" },
+                    { href: "/chats", icon: MessageSquare, label: "All chats" },
+                  ].map(({ href, icon: Icon, label, onClick }) => (
+                    <Tooltip key={href}>
+                      <TooltipTrigger
+                        render={
+                          onClick ? (
+                            <button
+                              type="button"
+                              onClick={onClick}
+                              className={cn(
+                                SIDEBAR_NAV_ITEM_BASE,
+                                "cursor-pointer justify-center px-0",
+                                pathname === href ? SIDEBAR_NAV_ITEM_ACTIVE : SIDEBAR_NAV_ITEM_IDLE
+                              )}
+                              aria-label={label}
+                            >
+                              <Icon className="size-[1.125rem] shrink-0" aria-hidden />
+                            </button>
+                          ) : (
+                            <Link
+                              href={href}
+                              className={cn(
+                                SIDEBAR_NAV_ITEM_BASE,
+                                "justify-center px-0",
+                                pathname === href ? SIDEBAR_NAV_ITEM_ACTIVE : SIDEBAR_NAV_ITEM_IDLE
+                              )}
+                              aria-label={label}
+                            >
+                              <Icon className="size-[1.125rem] shrink-0" aria-hidden />
+                            </Link>
+                          )
+                        }
+                      />
+                      <TooltipContent side="right">{label}</TooltipContent>
+                    </Tooltip>
+                  ))}
                 </div>
               )}
             </div>
 
-            <div
-              className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1"
-              data-scrollbar
-            >
+            {/* ── Chat list (scrollable) ── */}
+            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overflow-x-hidden pr-1" data-scrollbar>
+
+              {/* Sync error alerts */}
               {user && conversationsError && !sidebarCollapsed && (
                 <Alert variant="destructive" className="px-3 py-2 text-[12px]">
-                  <AlertTitle className="text-[12px] leading-tight">Chat sync</AlertTitle>
+                  <AlertTitle className="text-[12px] leading-tight">Sync error</AlertTitle>
                   <AlertDescription className="break-words text-[11px] leading-snug">
                     {conversationsError}
                   </AlertDescription>
@@ -465,85 +513,74 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 </Alert>
               )}
               {user && conversationsError && sidebarCollapsed && (
-                <button
-                  type="button"
-                  title={`Chat sync: ${conversationsError}`}
-                  onClick={() => clearConversationsError()}
-                  className="mx-auto flex size-10 shrink-0 cursor-pointer items-center justify-center rounded-xl text-destructive transition-colors hover:bg-destructive/10"
-                  aria-label="Chat sync error; dismiss"
-                >
-                  <AlertCircle className="size-5" aria-hidden />
-                </button>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <button
+                        type="button"
+                        onClick={() => clearConversationsError()}
+                        className="mx-auto flex size-10 shrink-0 cursor-pointer items-center justify-center rounded-xl text-destructive transition-colors hover:bg-destructive/10"
+                        aria-label={`Sync error: ${conversationsError}`}
+                      >
+                        <AlertCircle className="size-5" aria-hidden />
+                      </button>
+                    }
+                  />
+                  <TooltipContent side="right">Sync error — tap to dismiss</TooltipContent>
+                </Tooltip>
               )}
 
+              {/* Chat list — only shown when sidebar is expanded */}
               {user && !sidebarCollapsed && (
-                <div className="mt-2 space-y-0.5 border-t border-sidebar-border/60 pt-2">
-                  <div className="flex items-center justify-between gap-1.5 px-2.5">
-                    <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/75">
-                      {chatsPinned ? "Recent chats" : "Chats"}
-                    </p>
-                    <div className="flex shrink-0 items-center gap-0.5">
-                      {conversationsTotal > 0 && (
-                        <span className="inline-flex items-center rounded-full border border-sidebar-border/70 px-1.5 py-0.5 text-[9px] font-medium text-muted-foreground">
-                          {conversationsTotal}
-                        </span>
-                      )}
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        onClick={toggleChatsPinned}
-                        className="size-8 cursor-pointer rounded-lg text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
-                        title={
-                          chatsPinned
-                            ? "Use collapsible chat list"
-                            : "Keep chat list always visible"
-                        }
-                        aria-label={
-                          chatsPinned
-                            ? "Use collapsible chat list"
-                            : "Keep chat list always visible"
-                        }
-                      >
-                        {chatsPinned ? (
-                          <PinOff className="size-3.5" aria-hidden />
-                        ) : (
-                          <Pin className="size-3.5" aria-hidden />
-                        )}
-                      </Button>
+                <div className="mt-2 space-y-3 border-t border-sidebar-border/60 pt-2">
+
+                  {/* Loading skeletons */}
+                  {conversations.length === 0 && !conversationsError && (
+                    <div className="space-y-1.5 px-1">
+                      {[0, 1, 2, 3].map((i) => (
+                        <Skeleton key={i} className="h-7 w-full rounded-lg" />
+                      ))}
                     </div>
-                  </div>
-                  {conversations.length === 0 ? (
-                    <p className="px-2.5 py-1.5 text-[12px] text-muted-foreground/80">
-                      No chats yet
-                    </p>
-                  ) : chatsPinned ? (
-                    <div id="sidebar-chats-list" className="space-y-0.5 pr-0.5">
-                      {conversations.slice(0, CONVERSATIONS_UI_MAX).map((c) => {
-                        const selected = c.id === currentConversationId && pathname === "/";
-                        return (
-                          <button
-                            key={c.id}
-                            type="button"
-                            onClick={() => {
-                              if (c.id === currentConversationId && pathname === "/") return;
-                              loadConversation(c.id);
-                              if (pathname !== "/") router.push("/");
-                            }}
-                            className={cn(
-                              "flex w-full cursor-pointer items-center rounded-lg px-2.5 py-1.5 text-left text-[12px] transition-colors duration-150",
-                              selected
-                                ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                                : "text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
-                            )}
-                            title={c.title || "Untitled"}
-                          >
-                            <span className="truncate">{c.title || "Untitled"}</span>
-                          </button>
-                        );
-                      })}
+                  )}
+
+                  {/* ── Pinned section ── */}
+                  {pinnedConversations.length > 0 && (
+                    <div className="space-y-0.5">
+                      <p className={SIDEBAR_SECTION_LABEL}>Pinned</p>
+                      {pinnedConversations.slice(0, CONVERSATIONS_UI_MAX).map((c) => (
+                        <ChatItemRow
+                          key={c.id}
+                          id={c.id}
+                          title={c.title || "Untitled"}
+                          selected={c.id === currentConversationId && pathname === "/"}
+                          showPinIcon
+                        />
+                      ))}
                     </div>
-                  ) : (
+                  )}
+
+                  {/* ── Recent Chats section ── */}
+                  {recentConversations.length > 0 && (
+                    <div className="space-y-0.5">
+                      <div className="flex items-center justify-between gap-1.5 px-2.5">
+                        <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/75">
+                          Recent chats
+                        </p>
+                      </div>
+                      {recentConversations.slice(0, CONVERSATIONS_UI_MAX).map((c) => (
+                        <ChatItemRow
+                          key={c.id}
+                          id={c.id}
+                          title={c.title || "Untitled"}
+                          selected={c.id === currentConversationId && pathname === "/"}
+                          showPinIcon
+                        />
+                      ))}
+                    </div>
+                  )}
+
+                  {/* All chats collapsible (when no pinned/recent split is needed yet) */}
+                  {conversations.length > 0 && pinnedConversations.length === 0 && recentConversations.length === 0 && (
                     <>
                       <button
                         type="button"
@@ -568,43 +605,22 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                           aria-hidden
                         />
                       </button>
-                      {chatsExpanded && (
-                        <div
-                          id="sidebar-chats-list-collapsible"
-                          className="min-h-[2rem] space-y-0.5 pr-0.5"
-                        >
-                          {conversations.slice(0, CONVERSATIONS_UI_MAX).map((c) => {
-                            const selected = c.id === currentConversationId && pathname === "/";
-                            return (
-                              <button
-                                key={c.id}
-                                type="button"
-                                onClick={() => {
-                                  if (c.id === currentConversationId && pathname === "/") return;
-                                  loadConversation(c.id);
-                                  if (pathname !== "/") router.push("/");
-                                }}
-                                className={cn(
-                                  "flex w-full cursor-pointer items-center rounded-lg px-2.5 py-1.5 text-left text-[12px] transition-colors duration-150",
-                                  selected
-                                    ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                                    : "text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
-                                )}
-                                title={c.title || "Untitled"}
-                              >
-                                <span className="truncate">{c.title || "Untitled"}</span>
-                              </button>
-                            );
-                          })}
-                        </div>
-                      )}
                     </>
+                  )}
+
+                  {/* Empty state */}
+                  {conversations.length === 0 && !conversationsError && (
+                    <p className="px-2.5 py-1.5 text-[12px] text-muted-foreground/80">
+                      Your conversations will appear here
+                    </p>
                   )}
                 </div>
               )}
             </div>
           </div>
         </nav>
+
+        {/* ── User profile area ── */}
         <div
           className={cn(
             "shrink-0 border-t border-sidebar-border",
@@ -616,42 +632,55 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               {user ? (
                 sidebarCollapsed ? (
                   <div className="flex flex-col items-center gap-2">
-                    <div
-                      className="flex size-10 items-center justify-center rounded-lg bg-sidebar-primary/12 text-[12px] font-semibold text-sidebar-primary"
-                      title={user.email}
-                    >
-                      {userInitials}
-                    </div>
-                    <Button
-                      variant="ghost"
-                      size="icon-lg"
-                      className="size-9 cursor-pointer rounded-lg text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
-                      title="Sign out"
-                      onClick={() => signOut()}
-                    >
-                      <LogOut className="size-4" />
-                    </Button>
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <div className="cursor-default">
+                            <Avatar className="size-9 ring-1 ring-sidebar-border/70">
+                              <AvatarFallback className={cn("text-[12px] font-semibold", avatarColor)}>
+                                {userInitials}
+                              </AvatarFallback>
+                            </Avatar>
+                          </div>
+                        }
+                      />
+                      <TooltipContent side="right">{user.email}</TooltipContent>
+                    </Tooltip>
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="size-9 cursor-pointer rounded-xl text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
+                            onClick={() => signOut()}
+                            aria-label="Sign out"
+                          >
+                            <LogOut className="size-4" />
+                          </Button>
+                        }
+                      />
+                      <TooltipContent side="right">Sign out</TooltipContent>
+                    </Tooltip>
                   </div>
                 ) : (
                   <div className="flex items-center gap-2.5 px-1 py-1">
-                    <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-sidebar-primary/12 text-[12px] font-semibold text-sidebar-primary">
-                      {userInitials}
-                    </div>
+                    <Avatar className="size-9 shrink-0 ring-1 ring-sidebar-border/70">
+                      <AvatarFallback className={cn("text-[12px] font-semibold", avatarColor)}>
+                        {userInitials}
+                      </AvatarFallback>
+                    </Avatar>
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-[12px] font-semibold text-sidebar-foreground">
                         {userDisplayName}
                       </p>
-                      <p
-                        className="truncate text-[10px] text-muted-foreground"
-                        title={user.email}
-                      >
+                      <p className="truncate text-[10px] text-muted-foreground">
                         {user.email}
                       </p>
                     </div>
                     <Button
                       variant="ghost"
-                      className="h-8 shrink-0 cursor-pointer gap-1 rounded-lg px-2 text-[11px] font-medium text-muted-foreground hover:bg-sidebar-accent/70 hover:text-sidebar-foreground"
-                      title="Sign out"
+                      className="h-8 shrink-0 cursor-pointer gap-1 rounded-xl px-2 text-[11px] font-medium text-muted-foreground hover:bg-sidebar-accent/70 hover:text-sidebar-foreground"
                       onClick={() => signOut()}
                     >
                       <LogOut className="size-3.5" />
@@ -662,42 +691,54 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               ) : (
                 sidebarCollapsed ? (
                   <div className="flex flex-col items-center gap-2">
-                    <Link
-                      href="/login"
-                      title="Sign in"
-                      className={cn(
-                        buttonVariants({ variant: "outline", size: "icon-lg" }),
-                        "size-10 rounded-xl border-sidebar-border bg-background/70"
-                      )}
-                    >
-                      <LogIn className="size-4" />
-                    </Link>
-                    <Link
-                      href="/signup"
-                      title="Sign up"
-                      className={cn(
-                        buttonVariants({ variant: "default", size: "icon-lg" }),
-                        "size-10 rounded-xl shadow-sm"
-                      )}
-                    >
-                      <UserPlus className="size-4" />
-                    </Link>
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <Link
+                            href="/login"
+                            className={cn(
+                              buttonVariants({ variant: "outline", size: "icon" }),
+                              "size-9 rounded-xl border-sidebar-border bg-background/70"
+                            )}
+                            aria-label="Sign in"
+                          >
+                            <LogIn className="size-4" />
+                          </Link>
+                        }
+                      />
+                      <TooltipContent side="right">Sign in</TooltipContent>
+                    </Tooltip>
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <Link
+                            href="/signup"
+                            className={cn(
+                              buttonVariants({ variant: "default", size: "icon" }),
+                              "size-9 rounded-xl shadow-sm"
+                            )}
+                            aria-label="Sign up"
+                          >
+                            <UserPlus className="size-4" />
+                          </Link>
+                        }
+                      />
+                      <TooltipContent side="right">Sign up</TooltipContent>
+                    </Tooltip>
                   </div>
                 ) : (
                   <div className="space-y-2 px-0.5 py-1">
                     <div className="space-y-1 px-0.5">
                       <p className="text-[12px] font-semibold text-sidebar-foreground">
-                        Sign in for saved chats
+                        Save your conversations
                       </p>
                       <p className="text-[10px] leading-relaxed text-muted-foreground">
-                        Keep your conversation history, sync personalized suggestions, and jump
-                        back into previous analysis faster.
+                        Keep your history, sync personalized suggestions, and jump back into previous analysis faster.
                       </p>
                     </div>
                     <div className="grid gap-1.5">
                       <Link
                         href="/login"
-                        title="Sign in"
                         className={cn(
                           buttonVariants({ variant: "outline", size: "lg" }),
                           "h-11 justify-start rounded-xl border-sidebar-border bg-background/70 px-3"
@@ -708,7 +749,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                       </Link>
                       <Link
                         href="/signup"
-                        title="Sign up"
                         className={cn(
                           buttonVariants({ variant: "default", size: "lg" }),
                           "h-11 justify-start rounded-xl px-3 shadow-sm"
@@ -724,12 +764,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             </>
           )}
         </div>
+
+        {/* Resize handle */}
         {!sidebarCollapsed && (
           <div
             role="separator"
             aria-orientation="vertical"
             aria-label="Resize sidebar"
-            title="Drag to resize sidebar"
             className={cn(
               "absolute right-0 top-0 z-40 h-full w-3 shrink-0 cursor-col-resize touch-none select-none",
               "hover:bg-primary/10 active:bg-primary/15"
@@ -739,18 +780,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             onPointerUp={onSidebarResizePointerUp}
             onPointerCancel={onSidebarResizePointerCancel}
           >
-            <span
-              className="pointer-events-none absolute right-1 top-0 h-full w-px bg-border/80"
-              aria-hidden
-            />
           </div>
         )}
       </aside>
+
+      {/* ── Main content ── */}
       <main
         className={cn(
           "relative z-0 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden pl-[var(--sidebar-width)]",
-          /* Keep content below fixed chrome; max() guards if measured height lags wrapping/fonts */
-          "pt-[max(5.25rem,var(--app-chrome-header-h))]",
+          "pt-[var(--app-chrome-header-h,3.75rem)]",
           !isResizing && "transition-[padding-left] duration-200 ease-out"
         )}
       >

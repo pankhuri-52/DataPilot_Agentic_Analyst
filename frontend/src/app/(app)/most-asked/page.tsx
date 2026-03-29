@@ -69,11 +69,11 @@ export default function MostAskedPage() {
     <AppPageShell
       title="Most Asked"
       description="Questions you’ve run most often — open one to continue in chat."
-      bodyClassName="space-y-6"
+      bodyClassName="space-y-4"
     >
       {!user ? (
         <Card className="border-dashed">
-          <CardContent className="flex flex-col items-center justify-center py-16">
+          <CardContent className="flex flex-col items-center justify-center py-12">
             <TrendingUp className="mb-4 size-12 text-muted-foreground/50" aria-hidden />
             <p className="text-[13px] font-medium text-foreground">Sign in to see your top questions</p>
             <p className="mt-1 max-w-sm text-center text-[13px] text-muted-foreground">
@@ -91,7 +91,7 @@ export default function MostAskedPage() {
         <p className="text-[13px] text-muted-foreground">Loading…</p>
       ) : rows.length === 0 ? (
         <Card className="border-dashed">
-          <CardContent className="flex flex-col items-center justify-center py-16">
+          <CardContent className="flex flex-col items-center justify-center py-12">
             <MessageSquarePlus className="mb-4 size-12 text-muted-foreground/50" aria-hidden />
             <p className="text-[13px] font-medium text-foreground">No frequent questions yet</p>
             <p className="mt-1 text-center text-[13px] text-muted-foreground">
@@ -119,12 +119,12 @@ export default function MostAskedPage() {
                     "hover:border-primary/25 hover:bg-accent/30"
                   )}
                 >
-                  <CardContent className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
+                  <CardContent className="flex flex-col gap-2 p-3 sm:flex-row sm:items-center sm:justify-between">
                     <div className="min-w-0 flex-1">
                       <p className="text-[13px] font-medium leading-snug text-foreground">
                         {item.question}
                       </p>
-                      <p className="mt-1 text-[11px] text-muted-foreground">
+                      <p className="mt-0.5 text-[11px] text-muted-foreground">
                         Asked {item.ask_count} time{item.ask_count !== 1 ? "s" : ""}
                       </p>
                     </div>

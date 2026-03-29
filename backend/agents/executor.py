@@ -10,6 +10,7 @@ from agents.state import TraceEntry
 from agents.context import get_effective_connector, get_effective_schema
 from agents.schema_utils import plan_result_limit_display, sql_row_limit_rule_5
 from agents.trace_stream import append_trace
+from agents.optimizer import clean_sql_text, validate_sql_against_schema, repair_sql_with_feedback
 
 
 # Block DDL, DML, and dangerous operations
@@ -39,13 +40,25 @@ Analysis plan:
 Schema (dataset: {dataset}):
 {schema_json}
 
+Few-shot example:
+Input intent: "Average order value by month for completed orders in 2024"
+Output SQL:
+SELECT
+  DATE_TRUNC(order_date, MONTH) AS month,
+  AVG(total_amount) AS avg_order_value
+FROM `{project}.{dataset}.orders`
+WHERE status = 'completed' AND order_date >= DATE '2024-01-01' AND order_date < DATE '2025-01-01'
+GROUP BY month
+ORDER BY month;
+
 Rules:
 1. Use standard BigQuery SQL. Table names: `{project}.{dataset}.table_name`
 2. Only SELECT statements. No CREATE, INSERT, UPDATE, DELETE.
 3. Use proper JOINs. The schema JSON includes a top-level `relationships` array — follow it for join paths.
 4. For date filters, use EXTRACT or DATE functions. If period is "last_quarter", use DATE_SUB and DATE_TRUNC. Respect `data_range` on date columns in the schema when filtering.
 5. {row_limit_rule_5}
-6. Return ONLY the SQL query, no explanation. No markdown code blocks.
+6. Match SQL function to intent. If user asks for averages/mean, use AVG() (never SUM()).
+7. Return ONLY the SQL query, no explanation. No markdown code blocks.
 """
 
 EXECUTOR_PROMPT_POSTGRES = """Generate a PostgreSQL SQL query for the following analysis plan.
@@ -59,13 +72,25 @@ Analysis plan:
 Schema (schema: {schema}):
 {schema_json}
 
+Few-shot example:
+Input intent: "Average order value by month for completed orders in 2024"
+Output SQL:
+SELECT
+  DATE_TRUNC('month', order_date) AS month,
+  AVG(total_amount) AS avg_order_value
+FROM "{schema}".orders
+WHERE status = 'completed' AND order_date >= DATE '2024-01-01' AND order_date < DATE '2025-01-01'
+GROUP BY month
+ORDER BY month;
+
 Rules:
 1. Use standard PostgreSQL SQL. Table names: "{schema}".table_name or schema.table_name
 2. Only SELECT statements. No CREATE, INSERT, UPDATE, DELETE.
 3. Use proper JOINs. The schema JSON includes a top-level `relationships` array — follow it for join paths.
 4. For date filters, use DATE_TRUNC, INTERVAL, or CURRENT_DATE. If period is "last_quarter", use DATE_TRUNC('quarter', CURRENT_DATE) - INTERVAL '1 quarter'. Respect `data_range` on date columns in the schema when filtering.
 5. {row_limit_rule_5}
-6. Return ONLY the SQL query, no explanation. No markdown code blocks.
+6. Match SQL function to intent. If user asks for averages/mean, use AVG() (never SUM()).
+7. Return ONLY the SQL query, no explanation. No markdown code blocks.
 """
 
 
@@ -169,11 +194,8 @@ def run_executor(state: dict) -> dict:
                 dataset=dataset_id,
             )
         response = invoke_with_retry(llm, prompt)
-        sql = (response.content if hasattr(response, "content") else str(response)).strip()
-        if sql.startswith("```"):
-            sql = re.sub(r"^```\w*\n?", "", sql)
-            sql = re.sub(r"\n?```$", "", sql)
-        sql = sql.strip()
+        sql = clean_sql_text(response.content if hasattr(response, "content") else str(response))
+        correction_prompt = prompt
     else:
         src = (
             "knowledge base"
@@ -185,6 +207,9 @@ def run_executor(state: dict) -> dict:
             TraceEntry(agent="executor", status="info", message=f"Using SQL from {src}...").model_dump(),
         )
         schema = get_effective_schema(state)
+        correction_prompt = (
+            f"Validate and repair this {connector.dialect} SQL against the provided schema if needed."
+        )
 
     try:
         if FORBIDDEN_SQL_PATTERNS.search(sql):
@@ -193,6 +218,37 @@ def run_executor(state: dict) -> dict:
                 TraceEntry(agent="executor", status="error", message="SQL contains forbidden operations").model_dump(),
             )
             return {"trace": trace}
+
+        valid, validation_error = validate_sql_against_schema(sql, schema)
+        if not valid:
+            append_trace(
+                trace,
+                TraceEntry(
+                    agent="executor",
+                    status="info",
+                    message=f"Schema validation failed before execution, applying one correction pass: {validation_error}",
+                ).model_dump(),
+            )
+            llm = get_gemini()
+            sql = repair_sql_with_feedback(
+                llm=llm,
+                dialect=connector.dialect,
+                original_prompt=correction_prompt,
+                bad_sql=sql,
+                schema_json=json.dumps(schema, indent=2),
+                validation_error=validation_error or "unknown validation issue",
+            )
+            valid, validation_error = validate_sql_against_schema(sql, schema)
+            if not valid:
+                append_trace(
+                    trace,
+                    TraceEntry(
+                        agent="executor",
+                        status="error",
+                        message=f"SQL failed schema validation after correction: {validation_error}",
+                    ).model_dump(),
+                )
+                return {"trace": trace}
 
         append_trace(
             trace,

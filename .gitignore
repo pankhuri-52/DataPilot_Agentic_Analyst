@@ -3,7 +3,6 @@
 .env.local
 .env.*.local
 service-account.json
-.env.example
 
 # Dependencies
 node_modules/
@@ -15,12 +14,16 @@ env/
 
 # Build and IDE
 .next/
+frontend/.next/
+frontend/.agents/
+frontend/node_modules
 out/
 dist/
 *.tsbuildinfo
 *.egg-info/
 .idea/
 .vscode/
+.cursor/
 
 # OS
 .DS_Store
@@ -31,3 +34,8 @@ Thumbs.db
 .cache/
 tmp/
 temp/
+
+# Claude / Agents
+.claude/
+.agents/
+skills-lock.json

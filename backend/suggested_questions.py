@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import threading
 import time
 from typing import Any
@@ -26,10 +27,11 @@ _GENERIC_FALLBACK = [
 
 
 class SuggestedQuestionsOutput(BaseModel):
-    suggestions: list[str] = Field(
+    suggestions: list[dict[str, Any]] = Field(
         description=(
             "Short analytics questions answerable with ONLY the listed warehouse columns; "
-            "never invent column names (e.g. customers have segment, not industry)."
+            "never invent column names (e.g. customers have segment, not industry). "
+            "Each item must include question and required_fields."
         ),
     )
 
@@ -142,6 +144,125 @@ def _schema_columns_catalog(schema: dict[str, Any], max_tables: int = 32) -> str
     return "\n".join(lines) if lines else "(no column catalog)"
 
 
+def _schema_has_usable_columns(schema: dict[str, Any]) -> bool:
+    for t in schema.get("tables") or []:
+        if not isinstance(t, dict):
+            continue
+        cols = t.get("columns")
+        if not isinstance(cols, list):
+            continue
+        if any(isinstance(c, dict) and str(c.get("name") or "").strip() for c in cols):
+            return True
+    return False
+
+
+def _schema_allowlist(schema: dict[str, Any]) -> set[str]:
+    allow: set[str] = set()
+    for t in schema.get("tables") or []:
+        if not isinstance(t, dict):
+            continue
+        tn = str(t.get("name") or "").strip()
+        if not tn:
+            continue
+        tkey = tn.lower()
+        allow.add(tkey)
+        cols = t.get("columns")
+        if not isinstance(cols, list):
+            continue
+        for c in cols:
+            if not isinstance(c, dict):
+                continue
+            cn = str(c.get("name") or "").strip()
+            if not cn:
+                continue
+            ckey = cn.lower()
+            allow.add(ckey)
+            allow.add(f"{tkey}.{ckey}")
+    return allow
+
+
+def _normalize_required_field(value: str) -> str:
+    s = (value or "").strip().lower()
+    s = s.replace("`", "").replace('"', "")
+    s = re.sub(r"\s+", "", s)
+    return s
+
+
+def _extract_validated_questions(
+    raw_items: list[dict[str, Any]],
+    allowlist: set[str],
+    limit: int,
+) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+        question = str(item.get("question") or "").strip()
+        if not question:
+            continue
+        fields = item.get("required_fields")
+        if not isinstance(fields, list) or not fields:
+            continue
+        normalized = [_normalize_required_field(str(f)) for f in fields if str(f).strip()]
+        if not normalized:
+            continue
+        if any(f not in allowlist for f in normalized):
+            continue
+        key = question.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(question)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _schema_seed_questions(schema: dict[str, Any], limit: int) -> list[str]:
+    out: list[str] = []
+    for t in schema.get("tables") or []:
+        if not isinstance(t, dict):
+            continue
+        table_name = str(t.get("name") or "").strip()
+        cols = t.get("columns")
+        if not table_name or not isinstance(cols, list):
+            continue
+        numeric_cols: list[str] = []
+        date_cols: list[str] = []
+        dim_cols: list[str] = []
+        for c in cols:
+            if not isinstance(c, dict):
+                continue
+            name = str(c.get("name") or "").strip()
+            ctype = str(c.get("type") or "").lower()
+            if not name:
+                continue
+            if any(token in ctype for token in ("int", "numeric", "decimal", "float", "double")):
+                numeric_cols.append(name)
+            elif any(token in ctype for token in ("date", "time", "timestamp")):
+                date_cols.append(name)
+            else:
+                dim_cols.append(name)
+
+        if numeric_cols and dim_cols:
+            out.append(f"What is the average {numeric_cols[0]} by {dim_cols[0]} in {table_name}?")
+            if len(out) >= limit:
+                return out[:limit]
+            out.append(f"Show top 10 {dim_cols[0]} by total {numeric_cols[0]} in {table_name}.")
+            if len(out) >= limit:
+                return out[:limit]
+        if numeric_cols and date_cols:
+            out.append(f"How does {numeric_cols[0]} trend over {date_cols[0]} in {table_name}?")
+            if len(out) >= limit:
+                return out[:limit]
+        if dim_cols:
+            out.append(f"How many records are there by {dim_cols[0]} in {table_name}?")
+            if len(out) >= limit:
+                return out[:limit]
+    return out[:limit]
+
+
 def _clamp_suggestions(raw: list[str], limit: int) -> list[str]:
     lim = max(1, min(int(limit), 8))
     out: list[str] = []
@@ -164,25 +285,32 @@ def build_suggested_questions(
     *,
     suggestion_limit: int = 5,
     include_kb: bool | None = None,
+    source_id: str | None = None,
 ) -> dict[str, Any]:
     """
     Return { suggestions: list[str], source: str }.
-    source: cached | llm | history_only | generic | disabled
+    source: cached | llm | history_only | generic | disabled | schema_unavailable | schema_seeded
     """
     if not _feature_enabled():
         return {"suggestions": [], "source": "disabled"}
 
     kb_flag = _include_kb_resolved(include_kb)
     lim = max(1, min(int(suggestion_limit), 8))
+    effective_source_id = (source_id or "primary").strip() or "primary"
     fp_prefix = "unknown"
+    schema: dict[str, Any] = {}
+    schema_ready = False
+    source_label = "Primary warehouse (metadata.json)"
     try:
+        from data_sources.catalog_resolve import load_schema_catalog_for_source
         from agents.query_kb_helpers import schema_fingerprint_from_schema
-        from agents.schema_utils import load_schema
 
-        fp_prefix = schema_fingerprint_from_schema(load_schema())[:24]
+        schema, source_label, _hints = load_schema_catalog_for_source(user_id, effective_source_id)
+        schema_ready = _schema_has_usable_columns(schema)
+        fp_prefix = schema_fingerprint_from_schema(schema)[:24]
     except Exception:
         pass
-    cache_key = f"{user_id}|kb={int(kb_flag)}|n={lim}|{fp_prefix}"
+    cache_key = f"{user_id}|src={effective_source_id}|kb={int(kb_flag)}|n={lim}|{fp_prefix}"
     hit = _cache_get(cache_key)
     if hit is not None:
         hit = dict(hit)
@@ -214,16 +342,15 @@ def build_suggested_questions(
 
     if kb_flag and context and os.getenv("GOOGLE_API_KEY") and _llm_enabled():
         try:
-            from agents.schema_utils import load_schema
-            from db.factory import get_connector
+            from data_sources.runtime import resolve_connector_for_state
             from embeddings import embed_text
             from query_kb_store import match_similar_queries_with_relaxation
 
-            connector = get_connector()
+            connector = resolve_connector_for_state(
+                {"user_id": user_id, "active_source_id": effective_source_id}
+            )
             if connector:
                 from agents.query_kb_helpers import schema_fingerprint_from_schema
-
-                schema = load_schema()
                 fingerprint = schema_fingerprint_from_schema(schema)
                 interest = " | ".join(context[:5])
                 qvec = embed_text(interest[:8000], task_type="RETRIEVAL_QUERY")
@@ -239,24 +366,54 @@ def build_suggested_questions(
             logger.exception("suggested_questions KB retrieval failed (non-fatal)")
 
     if not context and not kb_questions:
-        out = {"suggestions": _clamp_suggestions(list(_GENERIC_FALLBACK), lim), "source": "generic"}
+        if schema_ready:
+            seeded = _schema_seed_questions(schema, lim)
+            if seeded:
+                out = {
+                    "suggestions": _clamp_suggestions(seeded, lim),
+                    "source": "schema_seeded",
+                    "source_id": effective_source_id,
+                    "source_label": source_label,
+                }
+                _cache_set(cache_key, out)
+                return out
+        out = {
+            "suggestions": _clamp_suggestions(list(_GENERIC_FALLBACK), lim),
+            "source": "generic",
+            "source_id": effective_source_id,
+            "source_label": source_label,
+        }
+        _cache_set(cache_key, out)
+        return out
+
+    if not schema_ready:
+        out = {
+            "suggestions": [],
+            "source": "schema_unavailable",
+            "source_id": effective_source_id,
+            "source_label": source_label,
+        }
         _cache_set(cache_key, out)
         return out
 
     if not _llm_enabled() or not os.getenv("GOOGLE_API_KEY"):
-        merged = list(dict.fromkeys(context + kb_questions))
-        sug = _history_only_suggestions(merged, lim)
-        out = {"suggestions": sug, "source": "history_only"}
+        seeded = _schema_seed_questions(schema, lim)
+        sug = _clamp_suggestions(seeded, lim)
+        out = {
+            "suggestions": sug,
+            "source": "schema_seeded" if sug else "history_only",
+            "source_id": effective_source_id,
+            "source_label": source_label,
+        }
         _cache_set(cache_key, out)
         return out
 
     try:
-        from agents.schema_utils import load_schema
         from llm import get_gemini, invoke_with_retry
 
-        schema = load_schema()
         catalog = _schema_tables_summary(schema)
         columns_catalog = _schema_columns_catalog(schema)
+        allowlist = _schema_allowlist(schema)
 
         hist_block = "\n".join(f"- {q}" for q in context[:12]) if context else "(no prior user questions)"
         kb_block = (
@@ -281,6 +438,8 @@ Warehouse columns (STRICT: every breakdown, filter, or grouping in a suggestion 
 
 Rules:
 - Output exactly {lim} suggestions in JSON field "suggestions".
+- Each item must be object: {{"question": "...", "required_fields": ["table.column", "column"]}}.
+- "required_fields" must list the exact columns needed to answer that question.
 - Each suggestion: one short question, under 140 characters, business language, no SQL.
 - Prefer new phrasing or angles (drill-downs, time comparisons, breakdowns) grounded in the user's themes.
 - If unsure, prefer metrics/dimensions explicitly listed above.
@@ -292,19 +451,34 @@ Rules:
         result = invoke_with_retry(structured, prompt)
         result_dict = result.model_dump() if hasattr(result, "model_dump") else result
         raw_list = result_dict.get("suggestions") or []
-        sug = _clamp_suggestions([str(x) for x in raw_list if x], lim)
+        sug = _extract_validated_questions(raw_list, allowlist, lim)
         if len(sug) < max(1, lim // 2):
-            merged = list(dict.fromkeys(context + kb_questions))
-            sug = _history_only_suggestions(merged, lim)
-            out = {"suggestions": sug, "source": "history_only"}
+            seeded = _schema_seed_questions(schema, lim)
+            sug = _clamp_suggestions(seeded, lim)
+            out = {
+                "suggestions": sug,
+                "source": "schema_seeded" if sug else "history_only",
+                "source_id": effective_source_id,
+                "source_label": source_label,
+            }
         else:
-            out = {"suggestions": sug, "source": "llm"}
+            out = {
+                "suggestions": sug,
+                "source": "llm",
+                "source_id": effective_source_id,
+                "source_label": source_label,
+            }
         _cache_set(cache_key, out)
         return out
     except Exception:
         logger.exception("suggested_questions LLM failed; falling back to history")
-        merged = list(dict.fromkeys(context + kb_questions))
-        sug = _history_only_suggestions(merged, lim)
-        out = {"suggestions": sug, "source": "history_only"}
+        seeded = _schema_seed_questions(schema, lim)
+        sug = _clamp_suggestions(seeded, lim)
+        out = {
+            "suggestions": sug,
+            "source": "schema_seeded" if sug else "history_only",
+            "source_id": effective_source_id,
+            "source_label": source_label,
+        }
         _cache_set(cache_key, out)
         return out

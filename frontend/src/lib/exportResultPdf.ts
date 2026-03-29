@@ -39,9 +39,6 @@ export interface ExportResultPdfInput {
   emptyResultReason?: string;
   sql?: string;
   results: Record<string, unknown>[];
-  /** PNG data URL from html2canvas, optional */
-  chartImageDataUrl?: string | null;
-  chartCaption?: string;
   /** Max rows in the PDF table (full export can be huge). Default 200. */
   maxTableRows?: number;
 }
@@ -62,12 +59,20 @@ function pdfBaseFilename(input: ExportResultPdfInput, when: Date): string {
   return `datapilot-${safeTitle || "report"}-${when.toISOString().slice(0, 10)}.pdf`;
 }
 
-/** Built-in PDF fonts: Helvetica for titles, Times for readable body copy */
+/** Built-in PDF fonts with app-like sans/mono balance. */
 const FONT_HEADING = "helvetica" as const;
-const FONT_BODY = "times" as const;
+const FONT_BODY = "helvetica" as const;
+const FONT_MONO = "courier" as const;
 
-const BODY_LINE_MM = 5.4;
-const SECTION_RULE_COLOR: [number, number, number] = [203, 213, 225];
+const BODY_LINE_MM = 4.9;
+/** Brand primary for rules and section accents */
+const SECTION_RULE_COLOR: [number, number, number] = [180, 127, 43];
+/** Brand primary blue for headings */
+const COLOR_HEADING: [number, number, number] = [111, 78, 29];
+/** Body text: dark slate */
+const COLOR_BODY: [number, number, number] = [30, 41, 59];
+/** Subdued: medium slate */
+const COLOR_MUTED: [number, number, number] = [71, 85, 105];
 
 /** Build PDF bytes (no download). Use with triggerPdfFileDownload after async chart capture. */
 export async function buildResultPdfBlob(
@@ -76,7 +81,7 @@ export async function buildResultPdfBlob(
   const doc = new jsPDF({ unit: "mm", format: "a4" });
   const pageW = doc.internal.pageSize.getWidth();
   const pageH = doc.internal.pageSize.getHeight();
-  const margin = 14;
+  const margin = 12;
   let y = margin;
   const when = input.generatedAt ?? new Date();
 
@@ -88,60 +93,69 @@ export async function buildResultPdfBlob(
   };
 
   const drawSectionRule = () => {
-    ensureSpace(4);
+    ensureSpace(5);
     doc.setDrawColor(...SECTION_RULE_COLOR);
-    doc.setLineWidth(0.35);
+    doc.setLineWidth(0.3);
     doc.line(margin, y, pageW - margin, y);
-    y += 8;
+    y += 5.5;
   };
 
   const writeHeading = (text: string, size = 12) => {
-    ensureSpace(size * 0.55 + 4);
+    ensureSpace(size * 0.52 + 4);
     doc.setFont(FONT_HEADING, "bold");
     doc.setFontSize(size);
-    doc.setTextColor(15, 23, 42);
+    doc.setTextColor(...COLOR_HEADING);
     doc.text(text, margin, y);
-    y += size * 0.55 + 2;
+    y += size * 0.52 + 1.5;
   };
 
   const writeBodyParagraph = (text: string, maxW = pageW - 2 * margin) => {
     doc.setFont(FONT_BODY, "normal");
-    doc.setFontSize(11);
-    doc.setTextColor(30, 41, 59);
+    doc.setFontSize(10.5);
+    doc.setTextColor(...COLOR_BODY);
     const lines = doc.splitTextToSize(text, maxW);
     ensureSpace(lines.length * BODY_LINE_MM + 2);
     doc.text(lines, margin, y);
-    y += lines.length * BODY_LINE_MM + 4;
+    y += lines.length * BODY_LINE_MM + 2.8;
   };
 
   const writeSubheading = (text: string) => {
-    ensureSpace(8);
+    ensureSpace(6.5);
     doc.setFont(FONT_HEADING, "bold");
     doc.setFontSize(10);
-    doc.setTextColor(51, 65, 85);
+    doc.setTextColor(...COLOR_MUTED);
     doc.text(text, margin, y);
-    y += 6;
+    y += 4.4;
   };
 
-  // —— Cover ——
+  // ── Cover ──
+  // DataPilot wordmark accent bar
+  doc.setFillColor(...SECTION_RULE_COLOR);
+  doc.rect(margin, y, 3, 12, "F");
   doc.setFont(FONT_HEADING, "bold");
   doc.setFontSize(20);
-  doc.setTextColor(15, 23, 42);
-  doc.text("DataPilot analysis report", margin, y);
-  y += 10;
+  doc.setTextColor(...COLOR_BODY);
+  doc.text("DataPilot", margin + 6, y + 8.5);
+  const wordmarkWidth = doc.getTextWidth("DataPilot");
+  doc.setFont(FONT_HEADING, "normal");
+  doc.setFontSize(11);
+  doc.setTextColor(...COLOR_MUTED);
+  doc.text("Analysis report", margin + 6 + wordmarkWidth + 4, y + 8.5);
+  y += 14;
 
   doc.setFont(FONT_HEADING, "normal");
-  doc.setFontSize(9.5);
-  doc.setTextColor(100, 116, 139);
+  doc.setFontSize(8.5);
+  doc.setTextColor(148, 163, 184);
   doc.text(`Generated ${when.toLocaleString()}`, margin, y);
-  y += 8;
+  y += 6;
 
   doc.setDrawColor(...SECTION_RULE_COLOR);
+  doc.setLineWidth(0.3);
   doc.line(margin, y, pageW - margin, y);
-  y += 10;
+  y += 6.5;
 
-  // —— Question ——
-  writeHeading("Your question", 12);
+  // ── 1. Your Question ──
+  writeHeading("Your Question", 12);
   const q = (input.userQuestion || "—").trim();
   writeBodyParagraph(q);
 
@@ -149,95 +163,19 @@ export async function buildResultPdfBlob(
   const explanation = input.explanation.trim();
   const missing = (input.missingExplanation ?? "").trim();
   const emptyReason = (input.emptyResultReason ?? "").trim();
-
-  // —— Visualization: dedicated landscape page (max size), then portrait for summary + table ——
-  if (input.chartImageDataUrl && input.chartImageDataUrl.length > 200) {
-    doc.addPage("a4", "l");
-    const lW = doc.internal.pageSize.getWidth();
-    const lH = doc.internal.pageSize.getHeight();
-    let ly = margin;
-    doc.setFont(FONT_HEADING, "bold");
-    doc.setFontSize(14);
-    doc.setTextColor(15, 23, 42);
-    doc.text("Visualization", margin, ly);
-    ly += 10;
-    const targetW = lW - 2 * margin;
-    const maxH = lH - ly - margin - 12;
-    const imgW = targetW;
-    const imgH = Math.min(maxH, imgW * 0.52);
-    try {
-      doc.addImage(input.chartImageDataUrl, "PNG", margin, ly, imgW, imgH, undefined, "SLOW");
-    } catch {
-      doc.setFont(FONT_BODY, "italic");
-      doc.setFontSize(10);
-      doc.setTextColor(100, 116, 139);
-      doc.text("Chart could not be embedded in this PDF.", margin, ly);
-      doc.setTextColor(30, 41, 59);
-    }
-    ly += imgH + 6;
-    if (input.chartCaption) {
-      doc.setFont(FONT_BODY, "italic");
-      doc.setFontSize(10);
-      doc.setTextColor(71, 85, 105);
-      const capLines = doc.splitTextToSize(input.chartCaption, lW - 2 * margin);
-      doc.text(capLines, margin, ly);
-      ly += capLines.length * 4.6 + 4;
-      doc.setTextColor(30, 41, 59);
-    }
-    doc.addPage("a4", "p");
-    y = margin;
-  }
-
-  // —— Summary & insights (clubbed after chart) ——
-  const hasSummaryBlock = Boolean(summary || (explanation && explanation !== summary));
-  if (hasSummaryBlock) {
-    drawSectionRule();
-    writeHeading("Summary & insights", 13);
-    if (summary) {
-      writeSubheading("At a glance");
-      writeBodyParagraph(summary);
-    }
-    if (explanation && explanation !== summary) {
-      writeSubheading("What this means");
-      writeBodyParagraph(explanation);
-    }
-  }
-
-  if (missing) {
-    drawSectionRule();
-    writeHeading("Data coverage note", 11);
-    doc.setFont(FONT_BODY, "normal");
-    doc.setFontSize(10);
-    doc.setTextColor(71, 85, 105);
-    const mLines = doc.splitTextToSize(missing, pageW - 2 * margin);
-    ensureSpace(mLines.length * 5 + 4);
-    doc.text(mLines, margin, y);
-    y += mLines.length * 5 + 6;
-    doc.setTextColor(30, 41, 59);
-  }
-
-  if (emptyReason && !explanation && !summary) {
-    drawSectionRule();
-    doc.setFont(FONT_BODY, "normal");
-    doc.setFontSize(11);
-    doc.setTextColor(71, 85, 105);
-    const erLines = doc.splitTextToSize(emptyReason, pageW - 2 * margin);
-    ensureSpace(erLines.length * BODY_LINE_MM + 4);
-    doc.text(erLines, margin, y);
-    y += erLines.length * BODY_LINE_MM + 6;
-    doc.setTextColor(30, 41, 59);
-  }
-
-  // —— Detailed results ——
+  const sql = (input.sql ?? "").trim();
   const maxRows = input.maxTableRows ?? 200;
   const firstRow = input.results[0];
   const rowIsObject =
     firstRow != null && typeof firstRow === "object" && !Array.isArray(firstRow);
-  if (input.results.length > 0 && rowIsObject) {
+  const hasResults = input.results.length > 0 && rowIsObject;
+  // ── 2. Detailed Results section ──
+  if (hasResults || sql) {
     drawSectionRule();
-    writeHeading("Detailed results", 12);
-    y += 2;
-    doc.setFont(FONT_BODY, "normal");
+    writeHeading("Detailed Results", 13);
+  }
+  // ── 3. Data table ──
+  if (hasResults) {
     const columns = Object.keys(firstRow as Record<string, unknown>);
     const slice = input.results.slice(0, maxRows);
     const rows = slice.map((row) => columns.map((c) => cellText(row[c])));
@@ -250,14 +188,14 @@ export async function buildResultPdfBlob(
       styles: {
         font: FONT_BODY,
         fontSize: 8,
-        cellPadding: 1.5,
+        cellPadding: 1.25,
         overflow: "linebreak",
-        textColor: [30, 41, 59],
+        textColor: COLOR_BODY,
       },
       headStyles: {
         font: FONT_HEADING,
-        fillColor: [30, 58, 138],
-        textColor: 255,
+        fillColor: COLOR_HEADING,
+        textColor: [255, 255, 255],
         fontStyle: "bold",
         fontSize: 8,
       },
@@ -266,53 +204,90 @@ export async function buildResultPdfBlob(
     });
 
     const docExt = doc as jsPDF & { lastAutoTable?: { finalY: number } };
-    y = (docExt.lastAutoTable?.finalY ?? y) + 6;
+    y = (docExt.lastAutoTable?.finalY ?? y) + 4.5;
 
     if (input.results.length > maxRows) {
-      doc.setFont(FONT_BODY, "italic");
-      doc.setFontSize(8.5);
-      doc.setTextColor(100, 116, 139);
+      doc.setFont(FONT_BODY, "normal");
+      doc.setFontSize(8);
+      doc.setTextColor(148, 163, 184);
       doc.text(
-        `Showing the first ${maxRows} of ${input.results.length} rows. Export from your warehouse for the full dataset.`,
+        `Showing the first ${maxRows} of ${input.results.length} rows.`,
         margin,
         y
       );
-      y += 6;
-      doc.setTextColor(30, 41, 59);
+      y += 4.5;
     }
   }
 
-  const sql = (input.sql ?? "").trim();
+  // ── 4. SQL query ──
   if (sql) {
-    doc.addPage("a4", "p");
-    y = margin;
-    writeHeading("Appendix: SQL query", 12);
-    y += 2;
-    doc.setFont("courier", "normal");
-    doc.setFontSize(8.5);
-    doc.setTextColor(51, 65, 85);
+    ensureSpace(14);
+    drawSectionRule();
+    writeHeading("SQL Query", 11);
+    y += 0.6;
+    doc.setFont(FONT_MONO, "normal");
+    doc.setFontSize(8);
+    doc.setTextColor(...COLOR_BODY);
     const sqlLines = doc.splitTextToSize(sql, pageW - 2 * margin);
-    const sqlLineH = 3.8;
-    for (let i = 0; i < sqlLines.length; i++) {
+    const sqlLineH = 3.45;
+    for (const line of sqlLines) {
       if (y + sqlLineH > pageH - margin) {
         doc.addPage("a4", "p");
         y = margin;
       }
-      doc.text(sqlLines[i], margin, y);
+      doc.text(line, margin, y);
       y += sqlLineH;
+    }
+    y += 2.5;
+  }
+
+  // ── 5. Summary ──
+  const hasSummaryBlock = Boolean(summary || (explanation && explanation !== summary));
+  if (hasSummaryBlock || missing || emptyReason) {
+    drawSectionRule();
+    writeHeading("Summary", 13);
+    if (summary) {
+      writeSubheading("At a glance");
+      writeBodyParagraph(summary);
+    }
+    if (explanation && explanation !== summary) {
+      writeSubheading("What this means");
+      writeBodyParagraph(explanation);
+    }
+    if (missing) {
+      writeSubheading("Data coverage note");
+      doc.setFont(FONT_BODY, "normal");
+      doc.setFontSize(9.5);
+      doc.setTextColor(...COLOR_MUTED);
+      const mLines = doc.splitTextToSize(missing, pageW - 2 * margin);
+      ensureSpace(mLines.length * 4.8 + 4);
+      doc.text(mLines, margin, y);
+      y += mLines.length * 4.8 + 4.5;
+    }
+    if (emptyReason && !explanation && !summary) {
+      doc.setFont(FONT_BODY, "normal");
+      doc.setFontSize(10);
+      doc.setTextColor(...COLOR_MUTED);
+      const erLines = doc.splitTextToSize(emptyReason, pageW - 2 * margin);
+      ensureSpace(erLines.length * BODY_LINE_MM + 4);
+      doc.text(erLines, margin, y);
+      y += erLines.length * BODY_LINE_MM + 4.5;
     }
   }
 
+  // ── Page footers ──
   const totalPages = doc.getNumberOfPages();
   for (let i = 1; i <= totalPages; i++) {
     doc.setPage(i);
     const pw = doc.internal.pageSize.getWidth();
     const ph = doc.internal.pageSize.getHeight();
     doc.setFont(FONT_HEADING, "normal");
-    doc.setFontSize(8);
+    doc.setFontSize(7.5);
     doc.setTextColor(148, 163, 184);
-    doc.text(`Page ${i} of ${totalPages}`, pw - margin - 22, ph - 8);
-    doc.text("DataPilot", margin, ph - 8);
+    doc.text(`Page ${i} of ${totalPages}`, pw - margin - 20, ph - 7);
+    doc.setFont(FONT_HEADING, "bold");
+    doc.setTextColor(...SECTION_RULE_COLOR);
+    doc.text("DataPilot", margin, ph - 7);
   }
 
   const filename = pdfBaseFilename(input, when);

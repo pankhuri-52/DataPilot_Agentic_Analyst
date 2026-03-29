@@ -8,6 +8,7 @@ import os
 import uuid
 from datetime import datetime, timezone
 from fastapi import FastAPI, HTTPException, Body, Depends, Query
+from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
@@ -327,6 +328,7 @@ def get_suggested_questions(
     user=Depends(_require_user),
     limit: int = Query(5, ge=1, le=8),
     include_kb: bool = Query(True),
+    source_id: str | None = Query(None),
 ):
     """
     RAG-style personalized prompts: chat history (+ optional query KB) + Gemini.
@@ -339,10 +341,44 @@ def get_suggested_questions(
             user["id"],
             suggestion_limit=limit,
             include_kb=include_kb,
+            source_id=source_id,
         )
     except Exception as e:
         logger.exception("get_suggested_questions failed")
         raise HTTPException(status_code=503, detail=_chat_error_detail(e))
+
+
+class SummariseTopicRequest(BaseModel):
+    messages: list[dict] = []
+
+
+@app.post("/chat/summarise-topic")
+def summarise_topic(body: SummariseTopicRequest, user=Depends(_require_user)):
+    """Derive a concise topic sentence from the user's messages for PDF export."""
+    try:
+        user_texts = [
+            m.get("content", "").strip()
+            for m in body.messages
+            if m.get("role") == "user" and m.get("content", "").strip()
+        ]
+        if not user_texts:
+            return {"topic": ""}
+        from llm import get_gemini, invoke_with_retry
+
+        joined = "\n".join(f"- {t}" for t in user_texts[:12])
+        prompt = (
+            "Given these user questions in order, write a single concise sentence "
+            "(under 160 characters) describing what the user was trying to find out. "
+            "Return only the sentence, nothing else.\n\n"
+            f"User questions:\n{joined}"
+        )
+        llm = get_gemini()
+        result = invoke_with_retry(llm, prompt)
+        topic = (result.content if hasattr(result, "content") else str(result)).strip()
+        return {"topic": topic[:200]}
+    except Exception as e:
+        logger.warning("summarise_topic failed: %s", e)
+        return {"topic": ""}
 
 
 @app.get("/conversations/{conversation_id}/messages")
@@ -404,6 +440,23 @@ def get_schema():
         return json.load(f)
 
 
+def _title_source_type(source_type: str | None) -> str:
+    raw = (source_type or "source").strip().lower()
+    if raw in ("postgres", "postgresql"):
+        return "Postgres"
+    if raw == "bigquery":
+        return "BigQuery"
+    if raw in ("csv", "csv_upload"):
+        return "CSV"
+    return raw.replace("_", " ").title()
+
+
+def _format_source_label(source_type: str | None, identifier: str) -> str:
+    kind = _title_source_type(source_type)
+    ident = (identifier or "default").strip()
+    return f"{kind} ({ident})"
+
+
 @app.get("/data-sources/status")
 def data_sources_status(user=Depends(get_current_user_optional)):
     """
@@ -427,7 +480,7 @@ def data_sources_status(user=Depends(get_current_user_optional)):
                 "detail": None,
             }
             if conn.dialect == "bigquery":
-                src["label"] = f"BigQuery · {conn.project_id} / {conn.dataset_id}"
+                src["label"] = _format_source_label("bigquery", str(conn.dataset_id))
                 try:
                     _resolve_credentials_path()
                     from google.cloud import bigquery
@@ -440,7 +493,7 @@ def data_sources_status(user=Depends(get_current_user_optional)):
                     src["detail"] = str(e)
             else:
                 schema_name = getattr(conn, "schema", "public")
-                src["label"] = f"PostgreSQL · {schema_name} (env)"
+                src["label"] = _format_source_label("postgres", str(schema_name))
                 try:
                     conn.execute("SELECT 1")
                     src["healthy"] = True
@@ -452,15 +505,30 @@ def data_sources_status(user=Depends(get_current_user_optional)):
 
     if user:
         try:
-            from data_sources.service import list_sources
+            from core.credentials_crypto import decrypt_config
+            from data_sources.service import get_source, list_sources
 
             for row in list_sources(user["id"]):
+                source_type = str(row.get("source_type") or "")
+                identifier = str(row.get("label") or "").strip()
+                try:
+                    detail_row = get_source(user["id"], str(row["id"]))
+                    if detail_row and detail_row.get("encrypted_config"):
+                        cfg = decrypt_config(detail_row["encrypted_config"])
+                        if source_type in ("postgres", "postgresql"):
+                            identifier = str(cfg.get("schema") or "public")
+                        elif source_type == "bigquery":
+                            identifier = str(cfg.get("dataset_id") or cfg.get("project_id") or identifier)
+                        elif source_type in ("csv", "csv_upload"):
+                            identifier = str(detail_row.get("label") or cfg.get("table") or identifier)
+                except Exception:
+                    logger.debug("source label fallback for %s", row.get("id"), exc_info=True)
                 sources.append(
                     {
                         "id": str(row["id"]),
-                        "type": row.get("source_type"),
+                        "type": source_type,
                         "healthy": bool(row.get("healthy")),
-                        "label": row.get("label") or row.get("source_type"),
+                        "label": _format_source_label(source_type, identifier or str(row.get("id") or "source")),
                         "detail": row.get("last_error"),
                     }
                 )

@@ -38,11 +38,11 @@ interface DataChartProps {
 }
 
 const CHART_COLORS = [
-  "var(--chart-1)",
-  "var(--chart-2)",
-  "var(--chart-3)",
-  "var(--chart-4)",
-  "var(--chart-5)",
+  "hsl(var(--chart-1))",
+  "hsl(var(--chart-2))",
+  "hsl(var(--chart-3))",
+  "hsl(var(--chart-4))",
+  "hsl(var(--chart-5))",
 ];
 
 /** Solid colors for PDF / html2canvas (CSS variables often rasterize poorly). */
@@ -63,10 +63,17 @@ export function DataChart({
 }: DataChartProps) {
   const palette = colorPalette === "export" ? EXPORT_CHART_COLORS : CHART_COLORS;
   const hWrap = chartHeightClassName;
-  const axisTickFill = colorPalette === "export" ? "#64748b" : "var(--muted-foreground)";
-  const gridStroke = colorPalette === "export" ? "#e2e8f0" : "var(--border)";
-  const cardBg = colorPalette === "export" ? "#ffffff" : "var(--card)";
-  const cardBorder = colorPalette === "export" ? "#e2e8f0" : "var(--border)";
+  const axisTickFill = colorPalette === "export" ? "#64748b" : "hsl(var(--muted-foreground))";
+  const gridStroke = colorPalette === "export" ? "#e2e8f0" : "hsl(var(--border))";
+  const cardBg = colorPalette === "export" ? "#ffffff" : "hsl(var(--card))";
+  const cardBorder = colorPalette === "export" ? "#e2e8f0" : "hsl(var(--border))";
+  const cardFg = colorPalette === "export" ? "#0f172a" : "hsl(var(--card-foreground))";
+  const tooltipStyle = {
+    backgroundColor: cardBg,
+    border: `1px solid ${cardBorder}`,
+    borderRadius: 8,
+    color: cardFg,
+  };
   const chartType = (chartSpec.chart_type || "table").toLowerCase();
   const xField = chartSpec.x_field ?? "";
   const yField = chartSpec.y_field ?? "";
@@ -105,11 +112,10 @@ export function DataChart({
             <Tooltip
               formatter={(value: unknown) => [formatLabel(value), yKey]}
               labelFormatter={formatLabel}
-              contentStyle={{
-                backgroundColor: cardBg,
-                border: `1px solid ${cardBorder}`,
-                borderRadius: 8,
-              }}
+              contentStyle={tooltipStyle}
+              itemStyle={{ color: cardFg }}
+              labelStyle={{ color: cardFg }}
+              wrapperStyle={{ zIndex: 90, pointerEvents: "none" }}
             />
             <Bar dataKey={yKey} fill={palette[0]} radius={[4, 4, 0, 0]} />
           </BarChart>
@@ -145,11 +151,10 @@ export function DataChart({
             <Tooltip
               formatter={(value: unknown) => [formatLabel(value), yKey]}
               labelFormatter={formatLabel}
-              contentStyle={{
-                backgroundColor: cardBg,
-                border: `1px solid ${cardBorder}`,
-                borderRadius: 8,
-              }}
+              contentStyle={tooltipStyle}
+              itemStyle={{ color: cardFg }}
+              labelStyle={{ color: cardFg }}
+              wrapperStyle={{ zIndex: 90, pointerEvents: "none" }}
             />
             {chartType === "area" ? (
               <Area
@@ -206,11 +211,10 @@ export function DataChart({
             </Pie>
             <Tooltip
               formatter={(value: unknown) => formatLabel(value)}
-              contentStyle={{
-                backgroundColor: cardBg,
-                border: `1px solid ${cardBorder}`,
-                borderRadius: 8,
-              }}
+              contentStyle={tooltipStyle}
+              itemStyle={{ color: cardFg }}
+              labelStyle={{ color: cardFg }}
+              wrapperStyle={{ zIndex: 90, pointerEvents: "none" }}
             />
             <Legend />
           </PieChart>

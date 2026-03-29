@@ -4,7 +4,16 @@ import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { AlertCircle, Send, Loader2, Sparkles, FileDown } from "lucide-react";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { AlertCircle, Send, Loader2, Sparkles } from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Skeleton } from "@/components/ui/skeleton";
 import { PlanCard } from "./PlanCard";
 import { ArtifactCard } from "./ArtifactCard";
 import { ExecutionPlanPanel } from "./ExecutionPlanPanel";
@@ -19,9 +28,7 @@ import {
 } from "@/contexts/ChatContext";
 
 import { API_BASE, fetchWithRetry } from "@/lib/httpClient";
-import { buildResultPdfBlob, triggerPdfFileDownload } from "@/lib/exportResultPdf";
 import { getPdfAnalyticalQuestion } from "@/lib/pdfUserQuestion";
-import { formatExecutedAtLabel } from "@/lib/formatExecutedAt";
 
 interface TraceEntry {
   agent: string;
@@ -67,6 +74,18 @@ interface PendingInterrupt {
   sql?: string;
   bytes_scanned?: number;
   estimated_cost?: number;
+}
+
+function titleSourceType(sourceType: string): string {
+  const key = sourceType.trim().toLowerCase();
+  if (key === "bigquery") return "BigQuery";
+  if (key === "postgres" || key === "postgresql") return "Postgres";
+  if (key === "csv" || key === "csv_upload") return "CSV";
+  return key ? key.replace(/_/g, " ").replace(/\b\w/g, (m) => m.toUpperCase()) : "Source";
+}
+
+function fallbackSourceLabel(sourceType: string, id: string): string {
+  return `${titleSourceType(sourceType)} (${id})`;
 }
 
 function extractPlanFromTrace(trace: TraceEntry[]): Record<string, unknown> | undefined {
@@ -129,12 +148,7 @@ export function DataPilotClient() {
   const [suggestedQuestions, setSuggestedQuestions] = useState<string[]>([]);
   const [suggestedSource, setSuggestedSource] = useState<string | null>(null);
   const [suggestedLoading, setSuggestedLoading] = useState(false);
-  const [pdfExportingForMessageId, setPdfExportingForMessageId] = useState<string | null>(null);
-  const [outcomePdfManual, setOutcomePdfManual] = useState<{
-    messageId: string;
-    url: string;
-    name: string;
-  } | null>(null);
+  const [suggestionsOpen, setSuggestionsOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const queryInputRef = useRef<HTMLInputElement>(null);
   /** Prevents double-submit before React commits loading/currentConversationId (avoids duplicate conversations). */
@@ -149,12 +163,6 @@ export function DataPilotClient() {
     const id = window.setTimeout(() => scrollToBottom(), 100);
     return () => clearTimeout(id);
   }, [messages]);
-
-  useEffect(() => {
-    return () => {
-      if (outcomePdfManual) URL.revokeObjectURL(outcomePdfManual.url);
-    };
-  }, [outcomePdfManual]);
 
   useEffect(() => {
     if (!composerQuerySeed) return;
@@ -178,11 +186,11 @@ export function DataPilotClient() {
         );
         if (!res.ok || cancelled) return;
         const data = (await res.json()) as {
-          sources?: { id: string; label: string }[];
+          sources?: { id: string; label: string; type?: string }[];
         };
         const opts = (data.sources ?? []).map((s) => ({
           id: s.id,
-          label: s.label || s.id,
+          label: s.label || fallbackSourceLabel(s.type ?? "", s.id),
         }));
         setSourceOptions(opts);
       } catch {
@@ -217,8 +225,14 @@ export function DataPilotClient() {
     }
     let cancelled = false;
     setSuggestedLoading(true);
+    const suggestedUrl = new URL(`${API_BASE}/conversations/suggested-questions`);
+    suggestedUrl.searchParams.set("limit", "5");
+    suggestedUrl.searchParams.set("include_kb", "true");
+    if (selectedDataSourceId) {
+      suggestedUrl.searchParams.set("source_id", selectedDataSourceId);
+    }
     fetchWithRetry(
-      `${API_BASE}/conversations/suggested-questions?limit=5&include_kb=true`,
+      suggestedUrl.toString(),
       { headers: { Authorization: `Bearer ${token}` } },
       { logLabel: "GET /conversations/suggested-questions" }
     )
@@ -249,7 +263,7 @@ export function DataPilotClient() {
     return () => {
       cancelled = true;
     };
-  }, [user, getAccessToken]);
+  }, [user, getAccessToken, selectedDataSourceId]);
 
   /** User text for the turn that owns this assistant bubble (for persistence on /ask/continue). */
   function precedingUserContent(convKey: string, assistantMessageId: string): string {
@@ -773,112 +787,108 @@ export function DataPilotClient() {
 
   const displayName =
     user?.name || user?.email?.split("@")[0] || "there";
+  const selectedSourceLabel =
+    sourceOptions.find((o) => o.id === selectedDataSourceId)?.label ?? "Select data source";
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-      <div className="space-y-6 pb-28 sm:pb-32">
-        {user && messages.length > 0 && (suggestedLoading || suggestedQuestions.length > 0) && (
-          <div className="mx-auto w-full max-w-xl rounded-xl border border-border/80 bg-muted/25 px-3 py-3 dark:bg-muted/15">
-            <div className="text-left">
-              <div className="flex items-start gap-2">
-                <Sparkles
-                  className="mt-0.5 size-3.5 shrink-0 text-primary"
-                  aria-hidden
-                />
-                <div className="min-w-0 flex-1 space-y-0.5">
-                  <p className="text-[12px] font-medium text-foreground">
-                    {suggestedSource === "generic"
-                      ? "Try asking"
-                      : "Based on your past questions"}
-                  </p>
-                  <p className="text-[10px] leading-snug text-muted-foreground">
-                    {suggestedSource === "generic"
-                      ? "Starter questions for this warehouse."
-                      : "From your history and similar saved queries, plus fresh AI ideas."}
-                  </p>
-                </div>
-              </div>
-              {suggestedLoading && (
-                <p className="mt-2 text-[10px] text-muted-foreground">Loading…</p>
-              )}
-              {!suggestedLoading && suggestedQuestions.length > 0 && (
-                <ul className="mt-2 space-y-0.5">
-                  {suggestedQuestions.map((q, i) => (
-                    <li key={`${i}-${q.slice(0, 64)}`}>
-                      <button
-                        type="button"
-                        onClick={() => requestComposerQuery(q)}
-                        className={cn(
-                          "w-full rounded-lg px-2 py-1.5 text-left text-[12px] leading-snug text-foreground",
-                          "transition-colors hover:bg-muted/80"
-                        )}
-                      >
-                        {q}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
+      {messages.length === 0 ? (
+        /* ── Centered empty state ── */
+        <div className="flex flex-1 flex-col items-center justify-center gap-8 px-4 py-12">
+          <div className="w-full max-w-2xl space-y-6 text-center">
+            <div>
+              <h2 className="font-display text-xl font-semibold tracking-tight text-foreground">
+                {`Hey ${displayName}, what would you like to explore today?`}
+              </h2>
+              {user ? (
+                <p className="mt-2 text-sm text-muted-foreground">
+                  Ask anything about your data, or pick one of the suggestions below.
+                </p>
+              ) : (
+                <p className="mt-2 text-sm text-muted-foreground">
+                  Sign in to save your chat history and get personalized suggestions.
+                </p>
               )}
             </div>
-          </div>
-        )}
 
-        {messages.length === 0 && (
-          <div className="mx-auto flex w-full max-w-2xl flex-col items-center px-2 py-4 text-center sm:py-6">
-            <h2 className="font-display text-sm font-semibold tracking-tight text-foreground sm:text-base">
-              {`Hey ${displayName}, what would you like to explore today?`}
-            </h2>
-            {user ? (
-              <>
-                <p className="mt-1.5 max-w-lg text-[10px] leading-snug text-muted-foreground sm:text-[11px]">
-                  Here are some questions you might want to ask based on your history
-                </p>
-                {suggestedLoading && (
-                  <ul
-                    className="mt-3 flex w-full max-w-xl flex-col items-center space-y-1"
-                    aria-busy="true"
-                    aria-label="Loading suggestions"
+            {/* Input form — centered when no messages */}
+            {sourceOptions.length > 0 && (
+              <div className="flex flex-wrap items-center justify-center gap-2">
+                <label className="text-[12px] font-medium text-foreground/80">Data source</label>
+                <Select
+                  value={selectedDataSourceId}
+                  onValueChange={(v) => v && setSelectedDataSourceId(v)}
+                  disabled={loading}
+                >
+                  <SelectTrigger className="h-8 max-w-[min(100%,28rem)] text-[13px]">
+                    <SelectValue>{selectedSourceLabel}</SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    {sourceOptions.map((o) => (
+                      <SelectItem key={o.id} value={o.id} label={o.label} className="text-[13px]">
+                        {o.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+            <form
+              onSubmit={handleSubmit}
+              className="flex gap-2 rounded-2xl border border-border/80 bg-card/75 p-2.5 shadow-sm transition-[border-color,box-shadow,background-color] focus-within:border-primary/45 focus-within:bg-card focus-within:ring-2 focus-within:ring-primary/20"
+            >
+              <Input
+                ref={queryInputRef}
+                placeholder="Ask anything about your data…"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                disabled={loading}
+                className="min-h-[48px] flex-1 border-0 bg-transparent px-3 text-sm focus-visible:ring-0 focus-visible:ring-offset-0"
+              />
+              <Button
+                type="submit"
+                disabled={loading}
+                size="icon"
+                className="size-12 shrink-0 cursor-pointer rounded-xl"
+              >
+                {loading ? (
+                  <Loader2 className="size-4 animate-spin" aria-hidden />
+                ) : (
+                  <Send className="size-4" aria-hidden />
+                )}
+                <span className="sr-only">Send</span>
+              </Button>
+            </form>
+
+            {/* Animated suggestion chips */}
+            {suggestedLoading && (
+              <div className="flex flex-wrap justify-center gap-2">
+                {[0, 1, 2, 3].map((i) => (
+                  <Skeleton key={i} className="h-9 w-40 rounded-xl" />
+                ))}
+              </div>
+            )}
+            {!suggestedLoading && suggestedQuestions.length > 0 && (
+              <div className="flex flex-wrap justify-center gap-2">
+                {suggestedQuestions.map((q, i) => (
+                  <button
+                    key={`${i}-${q.slice(0, 64)}`}
+                    type="button"
+                    onClick={() => requestComposerQuery(q)}
+                    style={{ animationDelay: `${i * 0.4}s` }}
+                    className="animate-float rounded-xl border border-border/70 bg-card px-4 py-2.5 text-sm shadow-xs transition-[border-color,background-color,box-shadow,color] hover:border-primary/35 hover:bg-accent/55 hover:text-accent-foreground hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   >
-                    {[0, 1, 2].map((i) => (
-                      <li key={i} className="w-full max-w-xl">
-                        <div
-                          className={cn(
-                            "mx-auto h-8 w-full max-w-xl rounded-lg bg-muted/40 animate-pulse"
-                          )}
-                        />
-                      </li>
-                    ))}
-                  </ul>
-                )}
-                {!suggestedLoading && suggestedQuestions.length > 0 && (
-                  <ul className="mt-3 flex w-full max-w-xl flex-col items-center space-y-0.5">
-                    {suggestedQuestions.map((q, i) => (
-                      <li key={`${i}-${q.slice(0, 64)}`} className="w-full max-w-xl">
-                        <button
-                          type="button"
-                          onClick={() => requestComposerQuery(q)}
-                          className={cn(
-                            "w-full rounded-lg px-3 py-1.5 text-center text-[12px] leading-snug text-foreground",
-                            "transition-colors hover:bg-muted/80",
-                            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
-                          )}
-                        >
-                          {q}
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </>
-            ) : (
-              <p className="mt-1.5 max-w-sm text-[10px] text-muted-foreground sm:text-[11px]">
-                Sign in to save your chat history and get personalized suggestions.
-              </p>
+                    {q}
+                  </button>
+                ))}
+              </div>
             )}
           </div>
-        )}
-
-        {messages.map((message, msgIndex) => (
+        </div>
+      ) : (
+        <>
+          <div className="space-y-6 pb-28 sm:pb-32">
+            {messages.map((message, msgIndex) => (
           <div
             key={message.id}
             className={cn(
@@ -893,7 +903,7 @@ export function DataPilotClient() {
               )}
             >
               {message.role === "user" ? (
-                <div className="rounded-2xl rounded-br-md bg-primary px-4 py-3 text-primary-foreground">
+                <div className="rounded-2xl rounded-br-md border border-primary/35 bg-primary px-4 py-3 shadow-sm text-primary-foreground">
                   <p className="text-sm leading-relaxed">{message.content}</p>
                 </div>
               ) : (
@@ -901,213 +911,9 @@ export function DataPilotClient() {
                   {message.error && (
                     <Alert variant="destructive" className="rounded-lg">
                       <AlertCircle className="size-4" />
-                      <AlertTitle>Error</AlertTitle>
+                      <AlertTitle>Something went wrong</AlertTitle>
                       <AlertDescription>{message.error}</AlertDescription>
                     </Alert>
-                  )}
-
-                  {/* Approval must appear before the long execution plan so users are not stuck waiting */}
-                  {message.pendingInterrupt && (
-                    <div className="space-y-3">
-                      <Alert className="rounded-lg border-primary/40 bg-primary/5">
-                        <AlertTitle>Action required</AlertTitle>
-                        <AlertDescription>
-                          {(message.pendingInterrupt.reason === "query_cache_hit" ||
-                            message.pendingInterrupt.data?.reason === "query_cache_hit")
-                            ? "We found a similar question you asked before. Review the saved SQL and sample results, then choose Re-run (full new analysis) or Adapt (re-run the saved query on your warehouse)."
-                            : "The run pauses here until you approve running the query against your warehouse. Review SQL and estimated cost (if shown), then choose Yes or No."}
-                        </AlertDescription>
-                      </Alert>
-                      <div className="rounded-lg border border-primary/30 bg-accent/20 p-4 space-y-3">
-                        {(message.pendingInterrupt.reason === "query_cache_hit" ||
-                          message.pendingInterrupt.data?.reason === "query_cache_hit") ? (
-                          <>
-                            <p className="text-xs font-medium">Similar question in your knowledge base</p>
-                            <p className="text-xs text-muted-foreground leading-relaxed">
-                              We&apos;ve answered something similar before. Here&apos;s the cached SQL
-                              + result sample
-                              {(() => {
-                                const iso =
-                                  (message.pendingInterrupt.data?.executed_at as string | undefined) ||
-                                  "";
-                                const label = formatExecutedAtLabel(iso);
-                                return label ? ` from ${label}` : "";
-                              })()}
-                              . <span className="font-medium">Re-run</span> runs the full analysis
-                              pipeline; <span className="font-medium">Adapt</span> reuses this SQL
-                              against your warehouse (skips planner / discovery / optimizer).
-                            </p>
-                            {(() => {
-                              const intr = message.pendingInterrupt!;
-                              const matched =
-                                (intr.data?.matched_question as string | undefined)?.trim() || "";
-                              const sim = intr.data?.similarity as number | undefined;
-                              return (
-                                <>
-                                  {matched && (
-                                    <p className="text-[11px] text-muted-foreground">
-                                      Matched question: <span className="text-foreground">{matched}</span>
-                                      {sim != null && !Number.isNaN(Number(sim)) && (
-                                        <span className="ml-2">· similarity {(Number(sim)).toFixed(2)}</span>
-                                      )}
-                                    </p>
-                                  )}
-                                </>
-                              );
-                            })()}
-                            {(() => {
-                              const intr = message.pendingInterrupt!;
-                              const sql =
-                                intr.sql ?? (intr.data?.sql as string | undefined);
-                              const preview = intr.data?.result_preview as
-                                | { rows?: Record<string, unknown>[]; row_count?: number }
-                                | undefined;
-                              const rows = Array.isArray(preview?.rows) ? preview.rows : [];
-                              const rowCount =
-                                typeof preview?.row_count === "number" ? preview.row_count : rows.length;
-                              return (
-                                <>
-                                  {sql && (
-                                    <pre className="text-[11px] overflow-x-auto rounded bg-muted/50 p-2 max-h-32">
-                                      {sql}
-                                    </pre>
-                                  )}
-                                  {rows.length > 0 && (
-                                    <div className="space-y-1">
-                                      <p className="text-[11px] text-muted-foreground">
-                                        Sample results ({rowCount} row{rowCount === 1 ? "" : "s"} total)
-                                      </p>
-                                      <div className="max-h-28 overflow-auto rounded border border-border/60 text-[10px]">
-                                        <table className="w-full border-collapse">
-                                          <thead>
-                                            <tr className="border-b bg-muted/30">
-                                              {Object.keys(rows[0]).map((k) => (
-                                                <th key={k} className="px-2 py-1 text-left font-medium">
-                                                  {k}
-                                                </th>
-                                              ))}
-                                            </tr>
-                                          </thead>
-                                          <tbody>
-                                            {rows.slice(0, 5).map((row, i) => (
-                                              <tr key={i} className="border-b border-border/40">
-                                                {Object.values(row).map((v, j) => (
-                                                  <td key={j} className="px-2 py-0.5 max-w-[120px] truncate">
-                                                    {v === null || v === undefined ? "" : String(v)}
-                                                  </td>
-                                                ))}
-                                              </tr>
-                                            ))}
-                                          </tbody>
-                                        </table>
-                                      </div>
-                                    </div>
-                                  )}
-                                  <div className="flex flex-wrap gap-2 pt-1">
-                                    <Button
-                                      size="sm"
-                                      className="cursor-pointer"
-                                      onClick={() =>
-                                        message.pendingInterrupt &&
-                                        handleContinue(message, { queryCache: "full_pipeline" })
-                                      }
-                                    >
-                                      Re-run
-                                    </Button>
-                                    <Button
-                                      size="sm"
-                                      variant="secondary"
-                                      className="cursor-pointer"
-                                      onClick={() =>
-                                        message.pendingInterrupt &&
-                                        handleContinue(message, { queryCache: "use_cached_sql" })
-                                      }
-                                    >
-                                      Adapt
-                                    </Button>
-                                  </div>
-                                </>
-                              );
-                            })()}
-                          </>
-                        ) : (message.pendingInterrupt.reason === "execute_query" ||
-                          message.pendingInterrupt.data?.reason === "execute_query") ? (
-                          <>
-                            <p className="text-xs font-medium">Query ready to execute</p>
-                            {(() => {
-                              const intr = message.pendingInterrupt!;
-                              const sql =
-                                intr.sql ?? (intr.data?.sql as string | undefined);
-                              const bytes =
-                                intr.bytes_scanned ??
-                                (intr.data?.bytes_scanned as number | undefined);
-                              const cost =
-                                intr.estimated_cost ??
-                                (intr.data?.estimated_cost as number | undefined);
-                              const dialect = intr.data?.dialect as string | undefined;
-                              return (
-                                <>
-                                  {!sql && (
-                                    <p className="text-xs text-amber-700 dark:text-amber-500">
-                                      SQL preview was not included in the response. You can still
-                                      try Yes to continue, or No to cancel.
-                                    </p>
-                                  )}
-                                  {sql && (
-                                    <pre className="text-[11px] overflow-x-auto rounded bg-muted/50 p-2 max-h-32">
-                                      {sql}
-                                    </pre>
-                                  )}
-                                  {dialect === "postgres" &&
-                                    bytes == null &&
-                                    cost == null && (
-                                      <p className="text-xs text-muted-foreground">
-                                        Cost and bytes estimates are available for BigQuery only.
-                                      </p>
-                                    )}
-                                  {(bytes != null || cost != null) && (
-                                    <p className="text-xs text-muted-foreground">
-                                      {bytes != null &&
-                                        `~${(bytes / (1024 * 1024)).toFixed(2)} MB scanned`}
-                                      {cost != null && ` · ~$${cost.toFixed(6)} estimated cost`}
-                                    </p>
-                                  )}
-                                  <p className="text-xs text-muted-foreground">
-                                    Execute this query?
-                                  </p>
-                                </>
-                              );
-                            })()}
-                          </>
-                        ) : (
-                          <p className="text-xs text-muted-foreground">
-                            Confirmation required to continue.
-                          </p>
-                        )}
-                        {!(
-                          message.pendingInterrupt.reason === "query_cache_hit" ||
-                          message.pendingInterrupt.data?.reason === "query_cache_hit"
-                        ) && (
-                          <div className="flex gap-2">
-                            <Button
-                              size="sm"
-                              className="cursor-pointer"
-                              onClick={() => message.pendingInterrupt && handleContinue(message, true)}
-                            >
-                              Yes
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="cursor-pointer"
-                              onClick={() => message.pendingInterrupt && handleContinue(message, false)}
-                            >
-                              No
-                            </Button>
-                          </div>
-                        )}
-                      </div>
-                    </div>
                   )}
 
                   {(() => {
@@ -1131,16 +937,21 @@ export function DataPilotClient() {
                             key={message.id}
                             plan={effectivePlan}
                             liveTrace={trace}
-                            isLoading={Boolean(message.loading && !message.pendingInterrupt)}
+                            isLoading={Boolean(message.loading || message.pendingInterrupt)}
                             isTurnComplete={Boolean(res && !message.loading)}
                             pendingInterrupt={
                               message.pendingInterrupt
                                 ? {
                                     reason: message.pendingInterrupt.reason,
                                     data: message.pendingInterrupt.data,
+                                    sql: message.pendingInterrupt.sql,
+                                    bytes_scanned: message.pendingInterrupt.bytes_scanned,
+                                    estimated_cost: message.pendingInterrupt.estimated_cost,
                                   }
                                 : undefined
                             }
+                            onContinue={(value) => message.pendingInterrupt && handleContinue(message, value as ContinueOpts)}
+                            continueDisabled={continueInFlightRef.current || loading}
                           />
                         )}
                       </>
@@ -1181,6 +992,32 @@ export function DataPilotClient() {
                             dataFeasibility={res.data_feasibility}
                             validationOk={res.validation_ok}
                             userQuestion={getPdfAnalyticalQuestion(messages, msgIndex)}
+                            fetchUserQuestion={async () => {
+                              try {
+                                const token = getAccessToken();
+                                const headers: Record<string, string> = { "Content-Type": "application/json" };
+                                if (token) headers.Authorization = `Bearer ${token}`;
+                                const r = await fetchWithRetry(
+                                  `${API_BASE}/chat/summarise-topic`,
+                                  {
+                                    method: "POST",
+                                    headers,
+                                    body: JSON.stringify({
+                                      messages: messages.slice(0, msgIndex + 1).map((m) => ({
+                                        role: m.role,
+                                        content: m.content ?? "",
+                                      })),
+                                    }),
+                                  },
+                                  { logLabel: "POST /chat/summarise-topic" }
+                                );
+                                if (!r.ok) return getPdfAnalyticalQuestion(messages, msgIndex);
+                                const data = (await r.json()) as { topic?: string };
+                                return data.topic?.trim() || getPdfAnalyticalQuestion(messages, msgIndex);
+                              } catch {
+                                return getPdfAnalyticalQuestion(messages, msgIndex);
+                              }
+                            }}
                             answerSummary={summaryDupesExplanation ? "" : answerSummary}
                             followUpSuggestions={followUps}
                             missingExplanation={
@@ -1191,71 +1028,8 @@ export function DataPilotClient() {
                           />
                         )}
                         {showOutcomeCard && (
-                          <div className="rounded-lg border border-border bg-card p-4 space-y-3">
-                            <div className="flex flex-wrap items-center justify-between gap-2">
-                              <p className="text-sm font-medium">Outcome</p>
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                className="cursor-pointer gap-1.5"
-                                disabled={pdfExportingForMessageId === message.id}
-                                onClick={() => {
-                                  const priorQ = getPdfAnalyticalQuestion(messages, msgIndex);
-                                  setPdfExportingForMessageId(message.id);
-                                  void (async () => {
-                                    try {
-                                      const { blob, filename } = await buildResultPdfBlob({
-                                        userQuestion: priorQ,
-                                        reportTitle: res.chart_spec?.title || "Results",
-                                        answerSummary: summaryDupesExplanation ? "" : answerSummary,
-                                        explanation: explanationText,
-                                        followUpSuggestions: followUps,
-                                        missingExplanation:
-                                          typeof res.missing_explanation === "string"
-                                            ? res.missing_explanation
-                                            : undefined,
-                                        emptyResultReason: emptyReason,
-                                        sql: typeof res.sql === "string" ? res.sql : undefined,
-                                        results: [],
-                                      });
-                                      setOutcomePdfManual((prev) => {
-                                        if (prev) URL.revokeObjectURL(prev.url);
-                                        return {
-                                          messageId: message.id,
-                                          url: URL.createObjectURL(blob),
-                                          name: filename,
-                                        };
-                                      });
-                                      triggerPdfFileDownload(blob, filename);
-                                    } catch (e) {
-                                      console.error("Outcome PDF export failed", e);
-                                    } finally {
-                                      setPdfExportingForMessageId(null);
-                                    }
-                                  })();
-                                }}
-                              >
-                                {pdfExportingForMessageId === message.id ? (
-                                  <Loader2 className="size-3.5 animate-spin" aria-hidden />
-                                ) : (
-                                  <FileDown className="size-3.5" aria-hidden />
-                                )}
-                                Download PDF
-                              </Button>
-                            </div>
-                            {outcomePdfManual?.messageId === message.id && (
-                              <p className="text-xs text-muted-foreground">
-                                No file saved?{" "}
-                                <a
-                                  href={outcomePdfManual.url}
-                                  download={outcomePdfManual.name}
-                                  className="font-medium text-primary underline underline-offset-2"
-                                >
-                                  Download PDF
-                                </a>
-                              </p>
-                            )}
+                          <div className="rounded-xl border border-border/80 bg-card/85 p-4 shadow-xs space-y-3">
+                            <p className="text-sm font-medium">Outcome</p>
                             {explanationText && (
                               <p className="text-sm text-muted-foreground">{res.explanation}</p>
                             )}
@@ -1269,8 +1043,7 @@ export function DataPilotClient() {
                           !res.missing_explanation &&
                           (res.validation_ok !== undefined || res.trace) && (
                             <p className="text-sm text-muted-foreground">
-                              Run finished. No tabular results were returned—check the execution plan
-                              above or try another question.
+                              No results found — try rephrasing your question.
                             </p>
                           )}
                         {(answerSummary || followUps.length > 0) && (
@@ -1292,67 +1065,117 @@ export function DataPilotClient() {
           </div>
         ))}
 
-        {error && (
-          <Alert variant="destructive" className="rounded-lg">
-            <AlertCircle className="size-4" />
-            <AlertTitle>Error</AlertTitle>
-            <AlertDescription>{error}</AlertDescription>
-          </Alert>
-        )}
+            {error && (
+              <Alert variant="destructive" className="rounded-lg">
+                <AlertCircle className="size-4" />
+                <AlertTitle>Something went wrong</AlertTitle>
+                <AlertDescription>{error}</AlertDescription>
+              </Alert>
+            )}
 
-        <div ref={messagesEndRef} />
-      </div>
+            <div ref={messagesEndRef} />
+          </div>
 
-      <div className="fixed bottom-0 left-[var(--sidebar-width)] right-0 z-40 border-border bg-background/95 px-4 py-3 sm:px-6 sm:py-3.5 backdrop-blur transition-[left] duration-200 ease-out supports-[backdrop-filter]:bg-background/80">
-        <div className="mx-auto max-w-4xl space-y-2">
-          {sourceOptions.length > 0 && (
-            <div className="flex flex-wrap items-center gap-2 px-1 text-[12px] text-muted-foreground">
-              <label htmlFor="datapilot-source" className="font-medium text-foreground/80">
-                Data source
-              </label>
-              <select
-                id="datapilot-source"
-                value={selectedDataSourceId}
-                onChange={(e) => setSelectedDataSourceId(e.target.value)}
-                disabled={loading}
-                className="max-w-[min(100%,28rem)] cursor-pointer rounded-md border border-border bg-background px-2 py-1.5 text-[13px] text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
-              >
-                {sourceOptions.map((o) => (
-                  <option key={o.id} value={o.id}>
-                    {o.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
-          <form
-            onSubmit={handleSubmit}
-            className="flex gap-2 rounded-2xl border border-border/80 bg-muted/40 p-2.5 shadow-sm transition-colors focus-within:border-primary/50 focus-within:ring-2 focus-within:ring-primary/20"
-          >
-            <Input
-              ref={queryInputRef}
-              placeholder="Ask a question about your data..."
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              disabled={loading}
-              className="min-h-[48px] flex-1 border-0 bg-transparent px-3 text-sm focus-visible:ring-0 focus-visible:ring-offset-0"
-            />
-            <Button
-              type="submit"
-              disabled={loading}
-              size="icon"
-              className="size-12 shrink-0 cursor-pointer rounded-xl"
-            >
-              {loading ? (
-                <Loader2 className="size-4 animate-spin" aria-hidden />
-              ) : (
-                <Send className="size-4" aria-hidden />
+          {/* Fixed bottom bar — only visible when messages exist */}
+          <div className="fixed bottom-0 left-[var(--sidebar-width)] right-0 z-40 border-t border-border/80 bg-background/92 px-4 py-3 shadow-lg sm:px-6 sm:py-3.5 backdrop-blur transition-[left] duration-200 ease-out supports-[backdrop-filter]:bg-background/78">
+            <div className="mx-auto max-w-4xl space-y-2">
+              {sourceOptions.length > 0 && (
+                <div className="flex flex-wrap items-center gap-2 px-1">
+                  <label className="text-[12px] font-medium text-foreground/80">
+                    Data source
+                  </label>
+                  <Select
+                    value={selectedDataSourceId}
+                    onValueChange={(v) => v && setSelectedDataSourceId(v)}
+                    disabled={loading}
+                  >
+                    <SelectTrigger className="h-8 max-w-[min(100%,28rem)] text-[13px]">
+                      <SelectValue>{selectedSourceLabel}</SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      {sourceOptions.map((o) => (
+                        <SelectItem key={o.id} value={o.id} label={o.label} className="text-[13px]">
+                          {o.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
               )}
-              <span className="sr-only">Send</span>
-            </Button>
-          </form>
-        </div>
-      </div>
+              <form
+                onSubmit={handleSubmit}
+                className="flex items-center gap-2 rounded-2xl border border-border/80 bg-card/78 p-2.5 shadow-sm transition-[border-color,box-shadow,background-color] focus-within:border-primary/45 focus-within:bg-card focus-within:ring-2 focus-within:ring-primary/20"
+              >
+                <Popover open={suggestionsOpen} onOpenChange={setSuggestionsOpen}>
+                  <PopoverTrigger
+                    render={
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="size-9 shrink-0 rounded-xl text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                      >
+                        <Sparkles className="size-4" aria-hidden />
+                        <span className="sr-only">Suggested questions</span>
+                      </Button>
+                    }
+                  />
+                  <PopoverContent side="top" align="start" className="w-80">
+                    <p className="text-xs font-semibold text-foreground">Questions you might ask</p>
+                    {suggestedLoading ? (
+                      <div className="mt-1.5 space-y-1.5">
+                        {[0, 1, 2, 3].map((i) => (
+                          <Skeleton key={i} className="h-7 w-full rounded-lg" />
+                        ))}
+                      </div>
+                    ) : suggestedQuestions.length > 0 ? (
+                      <ul className="mt-1 space-y-1">
+                        {suggestedQuestions.map((q, i) => (
+                          <li key={`${i}-${q.slice(0, 64)}`}>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                requestComposerQuery(q);
+                                setSuggestionsOpen(false);
+                              }}
+                              className="w-full rounded-lg border border-transparent px-2.5 py-2 text-left text-[12px] leading-snug text-foreground transition-[border-color,background-color,color] hover:border-border/65 hover:bg-accent/55 hover:text-accent-foreground"
+                            >
+                              {q}
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="mt-1 text-xs text-muted-foreground">No suggestions available.</p>
+                    )}
+                  </PopoverContent>
+                </Popover>
+                <Input
+                  ref={queryInputRef}
+                  placeholder="Ask anything about your data…"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  disabled={loading}
+                  className="min-h-[48px] flex-1 border-0 bg-transparent px-3 text-sm focus-visible:ring-0 focus-visible:ring-offset-0"
+                />
+                <Button
+                  type="submit"
+                  disabled={loading}
+                  size="icon"
+                  className="size-12 shrink-0 cursor-pointer rounded-xl"
+                >
+                  {loading ? (
+                    <Loader2 className="size-4 animate-spin" aria-hidden />
+                  ) : (
+                    <Send className="size-4" aria-hidden />
+                  )}
+                  <span className="sr-only">Send</span>
+                </Button>
+              </form>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }

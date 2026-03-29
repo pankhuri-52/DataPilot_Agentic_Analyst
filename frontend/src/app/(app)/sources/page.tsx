@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils";
 import { API_BASE, fetchWithRetry } from "@/lib/httpClient";
 import { useAuth } from "@/contexts/AuthContext";
 import { useChat } from "@/contexts/ChatContext";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   BigQueryVendorIcon,
   PostgresVendorIcon,
@@ -105,12 +106,15 @@ const CONNECTOR_CATALOG: CatalogEntry[] = [
   },
 ];
 
-type ConnectorUiState = "live" | "error" | "available" | "soon";
+type ConnectorUiState = "live" | "live-csv" | "error" | "available" | "soon";
 
 function connectorUiState(entry: CatalogEntry, sources: ApiSource[]): ConnectorUiState {
   const tnorm = (t: string) => t.toLowerCase();
   const match = sources.find((s) => entry.matchTypes.includes(tnorm(s.type || "")));
-  if (match) return match.healthy ? "live" : "error";
+  if (match) {
+    if (!match.healthy) return "error";
+    return entry.id === "csv_upload" ? "live-csv" : "live";
+  }
   if (entry.envDriven) return "available";
   return "soon";
 }
@@ -118,9 +122,10 @@ function connectorUiState(entry: CatalogEntry, sources: ApiSource[]): ConnectorU
 function badgeForState(state: ConnectorUiState): { label: string; className: string } {
   switch (state) {
     case "live":
+    case "live-csv":
       return {
         label: "Live",
-        className: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400",
+        className: "bg-success/15 text-success",
       };
     case "error":
       return {
@@ -129,7 +134,7 @@ function badgeForState(state: ConnectorUiState): { label: string; className: str
       };
     case "available":
       return {
-        label: "Not connected",
+        label: "Connect to enable",
         className: "bg-muted text-muted-foreground",
       };
     default:
@@ -152,12 +157,12 @@ function DataSourceModalChrome({
 }) {
   return createPortal(
     <div
-      className="fixed inset-x-0 bottom-0 top-[max(5.25rem,var(--app-chrome-header-h))] z-[70] flex items-center justify-center bg-black/50 p-4"
+      className="fixed inset-x-0 bottom-0 top-[var(--app-chrome-header-h,3.75rem)] z-[70] flex items-center justify-center bg-background/70 p-4 backdrop-blur-sm"
       role="dialog"
       aria-modal="true"
       aria-labelledby="ds-modal-title"
     >
-      <Card className="relative z-10 max-h-[90vh] w-full max-w-lg overflow-y-auto shadow-lg">
+      <Card className="relative z-10 max-h-[90vh] w-full max-w-lg overflow-y-auto border-border/80 bg-card/95 shadow-xl">
         <Button
           type="button"
           variant="ghost"
@@ -435,7 +440,7 @@ export default function SourcesPage() {
   return (
     <AppPageShell
       title="Data Sources"
-      description="Connect warehouses and uploads. Env-based primary sources appear alongside saved connections when you are signed in."
+      description="Connect your data warehouses and file uploads to start asking questions."
       bodyClassName="space-y-6"
     >
       {fetchError && (
@@ -446,10 +451,21 @@ export default function SourcesPage() {
       )}
 
       {loading && (
-        <div className="flex items-center gap-2 text-[13px] text-muted-foreground">
-          <Loader2 className="size-4 animate-spin" aria-hidden />
-          Loading source status…
-        </div>
+        <ul className="grid gap-3 sm:grid-cols-2">
+          {[0, 1, 2, 3].map((i) => (
+            <li key={i}>
+              <Card className="h-full">
+                <CardHeader className="flex flex-row items-start gap-3 space-y-0 pb-2">
+                  <Skeleton className="size-11 shrink-0 rounded-lg" />
+                  <div className="min-w-0 flex-1 space-y-1.5 pt-0.5">
+                    <Skeleton className="h-4 w-32" />
+                    <Skeleton className="h-3 w-48" />
+                  </div>
+                </CardHeader>
+              </Card>
+            </li>
+          ))}
+        </ul>
       )}
 
       {!loading && !status?.configured && (
@@ -463,21 +479,16 @@ export default function SourcesPage() {
         </Alert>
       )}
 
-      <section aria-labelledby="connectors-heading">
-        <div className="mb-4 flex items-center justify-between gap-4">
+      {!loading && (
+        <section aria-labelledby="connectors-heading">
           <h2
             id="connectors-heading"
-            className="font-display text-[14px] font-semibold tracking-tight text-foreground"
+            className="mb-4 font-display text-[14px] font-semibold tracking-tight text-foreground"
           >
             Connectors
           </h2>
-          <Button onClick={() => setShowAddForm((v) => !v)} className="cursor-pointer text-[13px]" size="sm">
-            <Plus className="mr-2 size-4" aria-hidden />
-            Add source
-          </Button>
-        </div>
-        <ul className="grid gap-3 sm:grid-cols-2">
-          {CONNECTOR_CATALOG.map((entry) => {
+          <ul className="grid gap-3 sm:grid-cols-2">
+            {CONNECTOR_CATALOG.map((entry) => {
             const VendorIcon = entry.Icon;
             const state = connectorUiState(entry, sources);
             const badge = badgeForState(state);
@@ -503,8 +514,9 @@ export default function SourcesPage() {
               <li key={entry.id}>
                 <Card
                   className={cn(
-                    "h-full transition-colors duration-200",
-                    state === "live" && "border-emerald-500/30 bg-emerald-500/[0.03]",
+                    "flex h-full flex-col transition-colors duration-200",
+                    (state === "live" || state === "live-csv") &&
+                      "border-success/30 border-l-2 border-l-success/55 bg-success/5",
                     state === "error" && "border-destructive/40",
                     dimmed && "opacity-70"
                   )}
@@ -514,7 +526,7 @@ export default function SourcesPage() {
                       <div
                         className={cn(
                           "flex size-11 shrink-0 items-center justify-center rounded-lg border border-border bg-muted/80",
-                          state === "live" && "border-emerald-500/25 bg-background"
+                          (state === "live" || state === "live-csv") && "border-success/30 bg-background"
                         )}
                         aria-hidden
                       >
@@ -525,7 +537,7 @@ export default function SourcesPage() {
                           {entry.name}
                         </CardTitle>
                         <CardDescription className="mt-1 text-[13px] leading-snug text-muted-foreground">
-                          {state === "live" && match?.label ? (
+                          {(state === "live" || state === "live-csv") && match?.label ? (
                             <span className="text-foreground/85">{match.label}</span>
                           ) : state === "error" && match?.detail ? (
                             <span className="break-words text-[13px] leading-snug text-destructive">
@@ -552,26 +564,67 @@ export default function SourcesPage() {
                       {badge.label}
                     </span>
                   </CardHeader>
-                  {openConnect && !dimmed && (
-                    <CardContent className="pt-0">
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        size="sm"
-                        className="text-[12px]"
-                        disabled={!user}
-                        onClick={openConnect}
-                      >
-                        {user ? "Connect…" : "Sign in to connect"}
-                      </Button>
+                  {/* Context-aware action buttons */}
+                  {!dimmed && (
+                    <CardContent className="mt-auto pt-0">
+                      {(state === "live" || state === "live-csv") ? (
+                        <div className="flex gap-2">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="text-[12px]"
+                            disabled={!user}
+                            onClick={openConnect}
+                          >
+                            {state === "live-csv" ? "Replace file" : "Edit connection"}
+                          </Button>
+                        </div>
+                      ) : state === "error" ? (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="text-[12px]"
+                          disabled={!user}
+                          onClick={openConnect}
+                        >
+                          Reconnect
+                        </Button>
+                      ) : state === "available" ? (
+                        <Button
+                          type="button"
+                          size="sm"
+                          className="text-[12px]"
+                          disabled={!user}
+                          onClick={openConnect}
+                        >
+                          {user ? "Connect →" : "Sign in to connect"}
+                        </Button>
+                      ) : null}
                     </CardContent>
                   )}
                 </Card>
               </li>
             );
-          })}
-        </ul>
-      </section>
+            })}
+
+            {/* + Add source card */}
+            <li>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowAddForm((v) => !v);
+                }}
+                className="flex h-full min-h-[120px] w-full cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border/70 bg-muted/20 text-muted-foreground transition-colors hover:border-primary/40 hover:bg-primary/5 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <Plus className="size-6" aria-hidden />
+                <span className="text-[13px] font-medium">Add source</span>
+              </button>
+            </li>
+          </ul>
+        </section>
+      )}
 
       {showAddForm && (
         <Card className="animate-in fade-in slide-up duration-200">
@@ -675,7 +728,7 @@ export default function SourcesPage() {
             <Input value={bqDataset} onChange={(e) => setBqDataset(e.target.value)} placeholder="my_dataset" />
             <label className="font-medium">Service account JSON</label>
             <textarea
-              className="min-h-[120px] w-full rounded-md border border-input bg-background px-3 py-2 text-[12px] font-mono"
+              className="min-h-[120px] w-full rounded-md border border-input/90 bg-background px-3 py-2 text-[12px] font-mono shadow-2xs outline-none transition-[border-color,box-shadow] focus:border-ring focus:ring-2 focus:ring-ring/35"
               value={bqSaJson}
               onChange={(e) => setBqSaJson(e.target.value)}
               placeholder="{ ... }"
@@ -728,7 +781,7 @@ export default function SourcesPage() {
             />
             <label className="font-medium">What this file is (helps the assistant)</label>
             <textarea
-              className="min-h-[88px] w-full rounded-md border border-input bg-background px-3 py-2 text-[13px] leading-snug"
+              className="min-h-[88px] w-full rounded-md border border-input/90 bg-background px-3 py-2 text-[13px] leading-snug shadow-2xs outline-none transition-[border-color,box-shadow] focus:border-ring focus:ring-2 focus:ring-ring/35"
               value={csvImportContext}
               onChange={(e) => setCsvImportContext(e.target.value)}
               placeholder='e.g. "Someone put monthly revenue targets by sales region in a spreadsheet. month is YYYY-MM; target_revenue_usd is USD."'

@@ -23,8 +23,8 @@ export function PlanCard({ plan }: PlanCardProps) {
       <Card
         className={
           isOutOfScope
-            ? "border-slate-500/35 bg-slate-500/5"
-            : "border-amber-500/30 bg-amber-500/5"
+            ? "border-border/80 bg-card shadow-xs"
+            : "border-primary/25 bg-card shadow-xs"
         }
       >
         <CardHeader>
