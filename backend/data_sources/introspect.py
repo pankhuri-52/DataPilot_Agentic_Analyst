@@ -204,7 +204,9 @@ def introspect_bigquery(
     from google.cloud import bigquery
 
     if not isinstance(client, bigquery.Client):
-        client = bigquery.Client(project=project_id)
+        from db.bigquery_connector import bigquery_client
+
+        client = bigquery_client(project_id)
 
     tables_out: list[dict] = []
     ds_ref = f"{project_id}.{dataset_id}"

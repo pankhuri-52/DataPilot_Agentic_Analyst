@@ -437,17 +437,6 @@ def get_messages(conversation_id: str, user=Depends(_require_user)):
         raise HTTPException(status_code=503, detail=_chat_error_detail(e))
 
 
-def _resolve_credentials_path():
-    """Resolve GOOGLE_APPLICATION_CREDENTIALS to an absolute path (project root if relative)."""
-    path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
-    if not path:
-        return
-    p = Path(path)
-    if not p.is_absolute():
-        p = _project_root / path
-    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(p.resolve())
-
-
 @app.get("/bigquery/tables")
 def bigquery_tables():
     """List BigQuery POC tables if BIGQUERY_PROJECT_ID and BIGQUERY_DATASET are set."""
@@ -458,10 +447,10 @@ def bigquery_tables():
             status_code=503,
             detail="BigQuery not configured. Set BIGQUERY_PROJECT_ID and BIGQUERY_DATASET in .env",
         )
-    _resolve_credentials_path()
     try:
-        from google.cloud import bigquery
-        client = bigquery.Client(project=project_id)
+        from db.bigquery_connector import bigquery_client
+
+        client = bigquery_client(project_id)
         dataset_ref = f"{project_id}.{dataset_id}"
         tables = list(client.list_tables(dataset_ref))
         return {
@@ -526,10 +515,9 @@ def data_sources_status(user=Depends(get_current_user_optional)):
             if conn.dialect == "bigquery":
                 src["label"] = _format_source_label("bigquery", str(conn.dataset_id))
                 try:
-                    _resolve_credentials_path()
-                    from google.cloud import bigquery
+                    from db.bigquery_connector import bigquery_client
 
-                    client = bigquery.Client(project=conn.project_id)
+                    client = bigquery_client(conn.project_id)
                     ds = f"{conn.project_id}.{conn.dataset_id}"
                     client.get_dataset(ds)
                     src["healthy"] = True

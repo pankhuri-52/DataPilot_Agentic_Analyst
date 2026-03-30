@@ -44,6 +44,7 @@ Create a `.env` file in the **project root** (same folder as `backend/` and `fro
 | `BIGQUERY_PROJECT_ID` | If using BQ | GCP project |
 | `BIGQUERY_DATASET` | No | Default `retail_data` |
 | `GOOGLE_APPLICATION_CREDENTIALS` | If using BQ | Path to service account JSON (or use ADC) |
+| `GCP_SERVICE_ACCOUNT_JSON` | If using BQ on serverless | Full service account JSON as a single string (e.g. Vercel); used when a file path is not available |
 | `DATABASE_TYPE` | If using Postgres | `postgres` |
 | `POSTGRES_URL` or `DATABASE_URL` | If Postgres | Connection string |
 | `FRONTEND_URL` | No | Password reset redirect (default `http://localhost:3000`) |

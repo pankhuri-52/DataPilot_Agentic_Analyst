@@ -1,6 +1,8 @@
 """
 BigQuery connector implementation.
 """
+import json
+import logging
 import os
 from decimal import Decimal
 from datetime import date, datetime
@@ -8,6 +10,44 @@ from pathlib import Path
 from typing import Any
 
 from db.connector import DatabaseConnector
+
+logger = logging.getLogger("datapilot")
+
+# Full service account JSON (e.g. paste into Vercel env). Takes precedence over file-based GOOGLE_APPLICATION_CREDENTIALS.
+_SERVICE_ACCOUNT_JSON_ENV = "GCP_SERVICE_ACCOUNT_JSON"
+
+
+def load_service_account_dict_from_env() -> dict[str, Any] | None:
+    """
+    Parse a service account JSON object from GCP_SERVICE_ACCOUNT_JSON.
+    Use for serverless hosts where a credentials file path is not available.
+    """
+    raw = os.getenv(_SERVICE_ACCOUNT_JSON_ENV, "").strip()
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as e:
+        logger.warning("Invalid JSON in %s: %s", _SERVICE_ACCOUNT_JSON_ENV, e)
+        return None
+    if not isinstance(data, dict):
+        logger.warning("%s must be a JSON object", _SERVICE_ACCOUNT_JSON_ENV)
+        return None
+    return data
+
+
+def bigquery_client(project_id: str):
+    """Build a BigQuery client using env JSON, file credentials, or Application Default Credentials."""
+    from google.cloud import bigquery
+
+    info = load_service_account_dict_from_env()
+    if info:
+        from google.oauth2 import service_account
+
+        creds = service_account.Credentials.from_service_account_info(info)
+        return bigquery.Client(project=project_id, credentials=creds)
+    _resolve_credentials_path()
+    return bigquery.Client(project=project_id)
 
 
 def _resolve_credentials_path():
@@ -82,8 +122,11 @@ class BigQueryConnector(DatabaseConnector):
     def __init__(self, project_id: str, dataset_id: str, credentials_info: dict | None = None):
         self.project_id = project_id
         self.dataset_id = dataset_id
-        self._credentials_info = credentials_info
-        if not credentials_info:
+        if credentials_info is not None:
+            self._credentials_info = credentials_info
+        else:
+            self._credentials_info = load_service_account_dict_from_env()
+        if not self._credentials_info:
             _resolve_credentials_path()
 
     def _client(self):
