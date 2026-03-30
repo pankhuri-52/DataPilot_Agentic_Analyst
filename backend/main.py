@@ -153,9 +153,16 @@ app.add_middleware(
 
 
 @app.get("/health")
-def health():
+def health(diagnostics: bool = False):
     """Health check for deployment and frontend."""
-    return {"status": "ok", "service": "datapilot-api"}
+    result: dict = {"status": "ok", "service": "datapilot-api"}
+    if diagnostics:
+        try:
+            from db.bigquery_connector import get_credential_diagnostics
+            result["bigquery_credentials"] = get_credential_diagnostics()
+        except Exception as e:
+            result["bigquery_credentials"] = {"error": str(e)}
+    return result
 
 
 @app.get("/")

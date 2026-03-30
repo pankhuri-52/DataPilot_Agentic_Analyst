@@ -20,7 +20,15 @@ _SERVICE_ACCOUNT_JSON_ENV = "GCP_SERVICE_ACCOUNT_JSON"
 _SERVICE_ACCOUNT_JSON_B64_ENV = "GCP_SERVICE_ACCOUNT_JSON_B64"
 
 
-def _parse_service_account_json(raw: str) -> dict[str, Any] | None:
+def _is_service_account_dict(data: dict[str, Any]) -> bool:
+    """True if dict looks like a GCP service account key (not e.g. `{}` or random JSON)."""
+    pk = data.get("private_key")
+    if not isinstance(pk, str) or "PRIVATE KEY" not in pk:
+        return False
+    return bool(data.get("client_email") or data.get("client_id"))
+
+
+def _parse_service_account_json(raw: str, *, source_label: str) -> dict[str, Any] | None:
     """Parse JSON object; accept double-encoded JSON string (common when pasting into env UIs)."""
     raw = raw.strip()
     if not raw:
@@ -28,38 +36,128 @@ def _parse_service_account_json(raw: str) -> dict[str, Any] | None:
     try:
         data = json.loads(raw)
     except json.JSONDecodeError as e:
-        logger.warning("Invalid JSON in %s: %s", _SERVICE_ACCOUNT_JSON_ENV, e)
+        logger.warning("Invalid JSON (%s): %s", source_label, e)
         return None
     if isinstance(data, str):
         try:
             data = json.loads(data)
         except json.JSONDecodeError as e:
-            logger.warning("Invalid nested JSON in %s: %s", _SERVICE_ACCOUNT_JSON_ENV, e)
+            logger.warning("Invalid nested JSON (%s): %s", source_label, e)
             return None
     if not isinstance(data, dict):
-        logger.warning("%s must decode to a JSON object", _SERVICE_ACCOUNT_JSON_ENV)
+        logger.warning("Expected JSON object (%s)", source_label)
         return None
     return data
+
+
+def _decode_b64_service_account_json(b64: str) -> dict[str, Any] | None:
+    """Decode standard or URL-safe base64; strip whitespace/newlines from pasted values."""
+    cleaned = "".join(b64.split())
+    if not cleaned:
+        return None
+    pad = (-len(cleaned)) % 4
+    padded = cleaned + ("=" * pad)
+    raw_bytes: bytes | None = None
+    try:
+        raw_bytes = base64.b64decode(padded)
+    except (binascii.Error, ValueError):
+        try:
+            raw_bytes = base64.urlsafe_b64decode(padded)
+        except (binascii.Error, ValueError) as e:
+            logger.warning("Invalid base64 in %s: %s", _SERVICE_ACCOUNT_JSON_B64_ENV, e)
+            return None
+    try:
+        text = raw_bytes.decode("utf-8")
+    except UnicodeDecodeError as e:
+        logger.warning("Invalid UTF-8 after base64 in %s: %s", _SERVICE_ACCOUNT_JSON_B64_ENV, e)
+        return None
+    if text.startswith("\ufeff"):
+        text = text.lstrip("\ufeff")
+    return _parse_service_account_json(text, source_label=_SERVICE_ACCOUNT_JSON_B64_ENV)
 
 
 def load_service_account_dict_from_env() -> dict[str, Any] | None:
     """
     Parse service account JSON from env.
     - GCP_SERVICE_ACCOUNT_JSON: raw JSON (single line recommended).
-    - GCP_SERVICE_ACCOUNT_JSON_B64: standard base64 of the UTF-8 JSON file (most reliable on Vercel).
+    - GCP_SERVICE_ACCOUNT_JSON_B64: base64 of the UTF-8 JSON file (recommended on Vercel).
+
+    If JSON env is set but invalid or not a service account key, we still try B64 (common misconfig).
     """
-    raw = os.getenv(_SERVICE_ACCOUNT_JSON_ENV, "").strip()
-    if not raw:
-        b64 = os.getenv(_SERVICE_ACCOUNT_JSON_B64_ENV, "").strip()
+    json_raw = os.getenv(_SERVICE_ACCOUNT_JSON_ENV, "").strip()
+    if json_raw:
+        parsed = _parse_service_account_json(json_raw, source_label=_SERVICE_ACCOUNT_JSON_ENV)
+        if parsed and _is_service_account_dict(parsed):
+            return parsed
+        logger.warning(
+            "%s is set but is not valid service account JSON; trying %s",
+            _SERVICE_ACCOUNT_JSON_ENV,
+            _SERVICE_ACCOUNT_JSON_B64_ENV,
+        )
+
+    b64 = os.getenv(_SERVICE_ACCOUNT_JSON_B64_ENV, "").strip()
+    if b64:
+        parsed = _decode_b64_service_account_json(b64)
+        if parsed and _is_service_account_dict(parsed):
+            return parsed
         if b64:
-            try:
-                raw = base64.b64decode(b64).decode("utf-8")
-            except (binascii.Error, UnicodeDecodeError) as e:
-                logger.warning("Invalid base64 in %s: %s", _SERVICE_ACCOUNT_JSON_B64_ENV, e)
-                return None
-    if not raw:
-        return None
-    return _parse_service_account_json(raw)
+            logger.warning(
+                "%s decoded but missing private_key/client_email; check the key file",
+                _SERVICE_ACCOUNT_JSON_B64_ENV,
+            )
+
+    return None
+
+
+def get_credential_diagnostics() -> dict[str, Any]:
+    """Return non-secret diagnostic info about available BigQuery credential methods."""
+    diag: dict[str, Any] = {}
+
+    # Method 1: raw JSON env var
+    json_raw = os.getenv(_SERVICE_ACCOUNT_JSON_ENV, "").strip()
+    if json_raw:
+        parsed = _parse_service_account_json(json_raw, source_label=_SERVICE_ACCOUNT_JSON_ENV)
+        if parsed and _is_service_account_dict(parsed):
+            email = parsed.get("client_email", "")
+            diag["GCP_SERVICE_ACCOUNT_JSON"] = {"set": True, "valid": True, "client_email": email}
+        else:
+            diag["GCP_SERVICE_ACCOUNT_JSON"] = {"set": True, "valid": False}
+    else:
+        diag["GCP_SERVICE_ACCOUNT_JSON"] = {"set": False}
+
+    # Method 2: base64 env var
+    b64 = os.getenv(_SERVICE_ACCOUNT_JSON_B64_ENV, "").strip()
+    if b64:
+        parsed = _decode_b64_service_account_json(b64)
+        if parsed and _is_service_account_dict(parsed):
+            email = parsed.get("client_email", "")
+            diag["GCP_SERVICE_ACCOUNT_JSON_B64"] = {"set": True, "valid": True, "client_email": email}
+        else:
+            diag["GCP_SERVICE_ACCOUNT_JSON_B64"] = {"set": True, "valid": False}
+    else:
+        diag["GCP_SERVICE_ACCOUNT_JSON_B64"] = {"set": False}
+
+    # Method 3: file path
+    raw_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "")
+    if raw_path:
+        creds_path = _credentials_file_path()
+        diag["GOOGLE_APPLICATION_CREDENTIALS"] = {
+            "set": True,
+            "raw_value": raw_path,
+            "file_exists": creds_path is not None,
+        }
+    else:
+        diag["GOOGLE_APPLICATION_CREDENTIALS"] = {"set": False}
+
+    # Summary
+    has_valid = any(
+        v.get("valid") or v.get("file_exists")
+        for v in diag.values()
+        if isinstance(v, dict)
+    )
+    diag["resolved"] = has_valid
+
+    return diag
 
 
 def _bigquery_credentials_unavailable_message() -> str:
@@ -91,16 +189,43 @@ def build_bigquery_client(project_id: str):
     from google.cloud import bigquery
     from google.oauth2 import service_account
 
+    tried: list[str] = []
+
+    # 1. Env-var JSON / B64
     info = load_service_account_dict_from_env()
     if info:
-        creds = service_account.Credentials.from_service_account_info(info)
+        try:
+            creds = service_account.Credentials.from_service_account_info(info)
+        except Exception as e:
+            raise RuntimeError(
+                "Could not load credentials from GCP_SERVICE_ACCOUNT_JSON / GCP_SERVICE_ACCOUNT_JSON_B64. "
+                "Check the key is a full service account JSON (with private_key and client_email)."
+            ) from e
         return bigquery.Client(project=project_id, credentials=creds)
 
+    # Record why env-var methods didn't work
+    json_set = bool(os.getenv(_SERVICE_ACCOUNT_JSON_ENV, "").strip())
+    b64_set = bool(os.getenv(_SERVICE_ACCOUNT_JSON_B64_ENV, "").strip())
+    if json_set:
+        tried.append(f"{_SERVICE_ACCOUNT_JSON_ENV}: set but not valid service-account JSON")
+    if b64_set:
+        tried.append(f"{_SERVICE_ACCOUNT_JSON_B64_ENV}: set but decode/validation failed")
+    if not json_set and not b64_set:
+        tried.append("GCP_SERVICE_ACCOUNT_JSON and GCP_SERVICE_ACCOUNT_JSON_B64: not set")
+
+    # 2. File path
     creds_path = _credentials_file_path()
     if creds_path is not None:
         creds = service_account.Credentials.from_service_account_file(str(creds_path))
         return bigquery.Client(project=project_id, credentials=creds)
 
+    raw_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "")
+    if raw_path:
+        tried.append(f"GOOGLE_APPLICATION_CREDENTIALS={raw_path!r}: file does not exist")
+    else:
+        tried.append("GOOGLE_APPLICATION_CREDENTIALS: not set")
+
+    # 3. ADC fallback
     try:
         import google.auth
         from google.auth.exceptions import DefaultCredentialsError
@@ -108,8 +233,14 @@ def build_bigquery_client(project_id: str):
         creds, _ = google.auth.default(
             scopes=["https://www.googleapis.com/auth/cloud-platform"],
         )
-    except DefaultCredentialsError as e:
-        raise RuntimeError(_bigquery_credentials_unavailable_message()) from e
+    except (DefaultCredentialsError, Exception) as e:
+        tried.append(f"Application Default Credentials: {e}")
+        detail = "\n".join(f"  - {t}" for t in tried)
+        raise RuntimeError(
+            f"BigQuery credentials could not be resolved. Methods tried:\n{detail}\n\n"
+            "On Vercel, set the env var GCP_SERVICE_ACCOUNT_JSON_B64 to the base64-encoded "
+            "contents of your service-account JSON file, then redeploy."
+        ) from e
 
     return bigquery.Client(project=project_id, credentials=creds)
 
@@ -120,7 +251,7 @@ def bigquery_client(project_id: str):
 
 
 def _resolve_credentials_path():
-    """Resolve GOOGLE_APPLICATION_CREDENTIALS to absolute path."""
+    """Resolve GOOGLE_APPLICATION_CREDENTIALS to absolute path; clear if file missing."""
     path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
     if not path:
         return
@@ -128,7 +259,16 @@ def _resolve_credentials_path():
     if not p.is_absolute():
         project_root = Path(__file__).resolve().parent.parent.parent
         p = project_root / path
-    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(p.resolve())
+    resolved = p.resolve()
+    if resolved.is_file():
+        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(resolved)
+    else:
+        logger.warning(
+            "GOOGLE_APPLICATION_CREDENTIALS=%s resolved to %s which does not exist; "
+            "clearing env var so ADC is not confused",
+            path, resolved,
+        )
+        os.environ.pop("GOOGLE_APPLICATION_CREDENTIALS", None)
 
 
 # Metadata columns that record when rows were inserted/updated, not business dates
