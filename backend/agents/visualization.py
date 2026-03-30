@@ -135,35 +135,47 @@ def run_visualization(state: dict) -> dict:
             else explanation
         )
         follow_up: list[str] = []
-        # Use contextual explanation when data_range or empty_result_reason is available
-        if data_range or empty_result_reason:
+        # Always run empty-state LLM when possible so users get causes + follow-ups (diagnostics may still be missing).
+        if data_range and data_range.get("min") and data_range.get("max"):
             data_range_info = (
-                f"Data spans from {data_range['min']} to {data_range['max']}"
-                if data_range and data_range.get("min") and data_range.get("max")
-                else (empty_result_reason or "Unknown")
+                f"Data spans from {data_range['min']} to {data_range['max']} "
+                f"(warehouse column {data_range.get('table', '?')}.{data_range.get('column', '?')})."
             )
-            try:
-                llm = get_gemini()
-                structured_llm = llm.with_structured_output(VisualizationOutput, method="json_mode")
-                prompt = VIZ_PROMPT_EMPTY.format(
-                    query=query,
-                    metrics=plan.get("metrics", []),
-                    dimensions=plan.get("dimensions", []),
-                    filters=plan.get("filters", {}),
-                    data_range_info=data_range_info,
-                    min_date=data_range.get("min", "?") if data_range else "?",
-                    max_date=data_range.get("max", "?") if data_range else "?",
-                )
-                result = invoke_with_retry(structured_llm, prompt)
-                result_dict = result.model_dump() if hasattr(result, "model_dump") else result
-                explanation = result_dict.get("explanation", empty_result_reason or "No data was returned for this query.")
-                answer_summary = result_dict.get("answer_summary") or explanation
-                raw_fu = result_dict.get("follow_up_suggestions") or []
-                follow_up = [str(x) for x in raw_fu if x][:5]
-            except Exception:
-                explanation = empty_result_reason or "No data was returned for this query."
+        elif empty_result_reason:
+            data_range_info = empty_result_reason
+        else:
+            data_range_info = (
+                "The warehouse returned zero rows. Common causes: filters match no data, INNER JOIN eliminated "
+                "all rows, GROUP BY with no matching groups, or HAVING removed aggregate rows. For return_items, "
+                "use return_date and lowercase reason_code (defective, changed_mind, not_as_described, duplicate_order)."
+            )
+        try:
+            llm = get_gemini()
+            structured_llm = llm.with_structured_output(VisualizationOutput, method="json_mode")
+            prompt = VIZ_PROMPT_EMPTY.format(
+                query=query,
+                metrics=plan.get("metrics", []),
+                dimensions=plan.get("dimensions", []),
+                filters=plan.get("filters", {}),
+                data_range_info=data_range_info,
+                min_date=data_range.get("min", "?") if data_range else "?",
+                max_date=data_range.get("max", "?") if data_range else "?",
+            )
+            result = invoke_with_retry(structured_llm, prompt)
+            result_dict = result.model_dump() if hasattr(result, "model_dump") else result
+            explanation = result_dict.get(
+                "explanation", empty_result_reason or "No data was returned for this query."
+            )
+            answer_summary = result_dict.get("answer_summary") or explanation
+            raw_fu = result_dict.get("follow_up_suggestions") or []
+            follow_up = [str(x) for x in raw_fu if x][:5]
+        except Exception:
+            if state.get("from_query_cache_adapt") and not preview_rows:
+                explanation = answer_summary
+            else:
+                explanation = empty_result_reason or data_range_info
                 answer_summary = explanation
-                follow_up = []
+            follow_up = []
         out_empty = {
             "chart_spec": {"chart_type": "table", "title": "No data", "x_field": None, "y_field": None},
             "explanation": explanation,

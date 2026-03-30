@@ -140,7 +140,9 @@ class PostgresConnector(DatabaseConnector):
             data_range["max"] = max(r["max"] for r in all_ranges)
 
         reason = (
-            f"No data found for the requested period. Available data spans from "
-            f"{data_range['min']} to {data_range['max']}. Try asking for a time range within this period."
+            f"The query returned no rows. Date values in this warehouse span roughly "
+            f"{data_range['min']} through {data_range['max']} (min/max across main DATE/TIMESTAMP columns). "
+            f"If you used filters or joins, try broadening them; for returns, reason_code values are lowercase "
+            f"(e.g. defective, changed_mind)."
         )
         return data_range, reason

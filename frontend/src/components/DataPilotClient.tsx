@@ -1042,6 +1042,13 @@ export function DataPilotClient() {
                             {emptyReason && !explanationText && (
                               <p className="text-sm text-muted-foreground">{emptyReason}</p>
                             )}
+                            {emptyReason &&
+                              explanationText &&
+                              emptyReason !== explanationText && (
+                                <p className="text-sm text-muted-foreground border-t border-border/60 pt-2 mt-1">
+                                  {emptyReason}
+                                </p>
+                              )}
                           </div>
                         )}
                         {!hasRows &&

@@ -287,18 +287,15 @@ def run_executor(state: dict) -> dict:
 
         update = {"sql": sql, "raw_results": raw_results, "trace": trace}
 
-        # Dynamic diagnostics: when 0 rows and plan has date filters, run diagnostic query
-        if len(raw_results) == 0 and effective_plan.get("filters"):
-            filters = effective_plan.get("filters", {})
-            has_date_filter = any(
-                k in filters for k in ("start_date", "end_date", "period", "date_range")
-            )
-            if has_date_filter:
-                data_range, empty_result_reason = connector.run_date_range_diagnostic(schema)
-                if data_range:
-                    update["data_range"] = data_range
-                if empty_result_reason:
-                    update["empty_result_reason"] = empty_result_reason
+        # When the query returns 0 rows, always load warehouse date coverage so visualization can explain
+        # empty results. (Planner often encodes years only in SQL — not in plan.filters — so we must not
+        # gate diagnostics on start_date/end_date/period keys.)
+        if len(raw_results) == 0:
+            data_range, empty_result_reason = connector.run_date_range_diagnostic(schema)
+            if data_range:
+                update["data_range"] = data_range
+            if empty_result_reason:
+                update["empty_result_reason"] = empty_result_reason
 
         return update
     except Exception as e:
