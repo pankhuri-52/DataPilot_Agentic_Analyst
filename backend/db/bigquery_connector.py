@@ -70,31 +70,53 @@ def _bigquery_credentials_unavailable_message() -> str:
     )
 
 
-def bigquery_client(project_id: str):
-    """Build a BigQuery client using env JSON, file credentials, or Application Default Credentials."""
+def _credentials_file_path() -> Path | None:
+    """Resolved path for GOOGLE_APPLICATION_CREDENTIALS if set and file exists."""
+    _resolve_credentials_path()
+    path = (os.getenv("GOOGLE_APPLICATION_CREDENTIALS") or "").strip()
+    if not path:
+        return None
+    p = Path(path)
+    if not p.is_absolute():
+        p = Path(__file__).resolve().parent.parent.parent / path
+    p = p.resolve()
+    return p if p.is_file() else None
+
+
+def build_bigquery_client(project_id: str):
+    """
+    Build a BigQuery client with explicit credentials.
+    Resolves auth at construction time so missing credentials fail here, not on the first query().
+    """
     from google.cloud import bigquery
+    from google.oauth2 import service_account
 
     info = load_service_account_dict_from_env()
     if info:
-        from google.oauth2 import service_account
-
         creds = service_account.Credentials.from_service_account_info(info)
         return bigquery.Client(project=project_id, credentials=creds)
-    _resolve_credentials_path()
-    path = (os.getenv("GOOGLE_APPLICATION_CREDENTIALS") or "").strip()
-    if path:
-        p = Path(path)
-        if not p.is_absolute():
-            p = Path(__file__).resolve().parent.parent.parent / path
-        if p.is_file():
-            return bigquery.Client(project=project_id)
+
+    creds_path = _credentials_file_path()
+    if creds_path is not None:
+        creds = service_account.Credentials.from_service_account_file(str(creds_path))
+        return bigquery.Client(project=project_id, credentials=creds)
+
     try:
-        return bigquery.Client(project=project_id)
-    except Exception as e:
-        msg = str(e).lower()
-        if "default credentials" in msg or "automatically determine credentials" in msg:
-            raise RuntimeError(_bigquery_credentials_unavailable_message()) from e
-        raise
+        import google.auth
+        from google.auth.exceptions import DefaultCredentialsError
+
+        creds, _ = google.auth.default(
+            scopes=["https://www.googleapis.com/auth/cloud-platform"],
+        )
+    except DefaultCredentialsError as e:
+        raise RuntimeError(_bigquery_credentials_unavailable_message()) from e
+
+    return bigquery.Client(project=project_id, credentials=creds)
+
+
+def bigquery_client(project_id: str):
+    """Build a BigQuery client using env JSON, service account file, or Application Default Credentials."""
+    return build_bigquery_client(project_id)
 
 
 def _resolve_credentials_path():
@@ -178,27 +200,12 @@ class BigQueryConnector(DatabaseConnector):
 
     def _client(self):
         from google.cloud import bigquery
+        from google.oauth2 import service_account
 
         if self._credentials_info:
-            from google.oauth2 import service_account
-
             creds = service_account.Credentials.from_service_account_info(self._credentials_info)
             return bigquery.Client(project=self.project_id, credentials=creds)
-        _resolve_credentials_path()
-        path = (os.getenv("GOOGLE_APPLICATION_CREDENTIALS") or "").strip()
-        if path:
-            p = Path(path)
-            if not p.is_absolute():
-                p = Path(__file__).resolve().parent.parent.parent / path
-            if p.is_file():
-                return bigquery.Client(project=self.project_id)
-        try:
-            return bigquery.Client(project=self.project_id)
-        except Exception as e:
-            msg = str(e).lower()
-            if "default credentials" in msg or "automatically determine credentials" in msg:
-                raise RuntimeError(_bigquery_credentials_unavailable_message()) from e
-            raise
+        return build_bigquery_client(self.project_id)
 
     @property
     def dialect(self) -> str:
