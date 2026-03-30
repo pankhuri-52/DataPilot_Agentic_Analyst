@@ -1,6 +1,8 @@
 """
 BigQuery connector implementation.
 """
+import base64
+import binascii
 import json
 import logging
 import os
@@ -13,16 +15,14 @@ from db.connector import DatabaseConnector
 
 logger = logging.getLogger("datapilot")
 
-# Full service account JSON (e.g. paste into Vercel env). Takes precedence over file-based GOOGLE_APPLICATION_CREDENTIALS.
+# Full service account JSON (e.g. Vercel env). Prefer GCP_SERVICE_ACCOUNT_JSON_B64 if the dashboard mangles JSON.
 _SERVICE_ACCOUNT_JSON_ENV = "GCP_SERVICE_ACCOUNT_JSON"
+_SERVICE_ACCOUNT_JSON_B64_ENV = "GCP_SERVICE_ACCOUNT_JSON_B64"
 
 
-def load_service_account_dict_from_env() -> dict[str, Any] | None:
-    """
-    Parse a service account JSON object from GCP_SERVICE_ACCOUNT_JSON.
-    Use for serverless hosts where a credentials file path is not available.
-    """
-    raw = os.getenv(_SERVICE_ACCOUNT_JSON_ENV, "").strip()
+def _parse_service_account_json(raw: str) -> dict[str, Any] | None:
+    """Parse JSON object; accept double-encoded JSON string (common when pasting into env UIs)."""
+    raw = raw.strip()
     if not raw:
         return None
     try:
@@ -30,10 +30,44 @@ def load_service_account_dict_from_env() -> dict[str, Any] | None:
     except json.JSONDecodeError as e:
         logger.warning("Invalid JSON in %s: %s", _SERVICE_ACCOUNT_JSON_ENV, e)
         return None
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except json.JSONDecodeError as e:
+            logger.warning("Invalid nested JSON in %s: %s", _SERVICE_ACCOUNT_JSON_ENV, e)
+            return None
     if not isinstance(data, dict):
-        logger.warning("%s must be a JSON object", _SERVICE_ACCOUNT_JSON_ENV)
+        logger.warning("%s must decode to a JSON object", _SERVICE_ACCOUNT_JSON_ENV)
         return None
     return data
+
+
+def load_service_account_dict_from_env() -> dict[str, Any] | None:
+    """
+    Parse service account JSON from env.
+    - GCP_SERVICE_ACCOUNT_JSON: raw JSON (single line recommended).
+    - GCP_SERVICE_ACCOUNT_JSON_B64: standard base64 of the UTF-8 JSON file (most reliable on Vercel).
+    """
+    raw = os.getenv(_SERVICE_ACCOUNT_JSON_ENV, "").strip()
+    if not raw:
+        b64 = os.getenv(_SERVICE_ACCOUNT_JSON_B64_ENV, "").strip()
+        if b64:
+            try:
+                raw = base64.b64decode(b64).decode("utf-8")
+            except (binascii.Error, UnicodeDecodeError) as e:
+                logger.warning("Invalid base64 in %s: %s", _SERVICE_ACCOUNT_JSON_B64_ENV, e)
+                return None
+    if not raw:
+        return None
+    return _parse_service_account_json(raw)
+
+
+def _bigquery_credentials_unavailable_message() -> str:
+    return (
+        "BigQuery credentials missing. On Vercel set GCP_SERVICE_ACCOUNT_JSON (minified JSON) or "
+        "GCP_SERVICE_ACCOUNT_JSON_B64 (base64 of the JSON file), then redeploy. "
+        "Locally you can use GOOGLE_APPLICATION_CREDENTIALS pointing at a JSON file."
+    )
 
 
 def bigquery_client(project_id: str):
@@ -47,7 +81,20 @@ def bigquery_client(project_id: str):
         creds = service_account.Credentials.from_service_account_info(info)
         return bigquery.Client(project=project_id, credentials=creds)
     _resolve_credentials_path()
-    return bigquery.Client(project=project_id)
+    path = (os.getenv("GOOGLE_APPLICATION_CREDENTIALS") or "").strip()
+    if path:
+        p = Path(path)
+        if not p.is_absolute():
+            p = Path(__file__).resolve().parent.parent.parent / path
+        if p.is_file():
+            return bigquery.Client(project=project_id)
+    try:
+        return bigquery.Client(project=project_id)
+    except Exception as e:
+        msg = str(e).lower()
+        if "default credentials" in msg or "automatically determine credentials" in msg:
+            raise RuntimeError(_bigquery_credentials_unavailable_message()) from e
+        raise
 
 
 def _resolve_credentials_path():
@@ -138,7 +185,20 @@ class BigQueryConnector(DatabaseConnector):
             creds = service_account.Credentials.from_service_account_info(self._credentials_info)
             return bigquery.Client(project=self.project_id, credentials=creds)
         _resolve_credentials_path()
-        return bigquery.Client(project=self.project_id)
+        path = (os.getenv("GOOGLE_APPLICATION_CREDENTIALS") or "").strip()
+        if path:
+            p = Path(path)
+            if not p.is_absolute():
+                p = Path(__file__).resolve().parent.parent.parent / path
+            if p.is_file():
+                return bigquery.Client(project=self.project_id)
+        try:
+            return bigquery.Client(project=self.project_id)
+        except Exception as e:
+            msg = str(e).lower()
+            if "default credentials" in msg or "automatically determine credentials" in msg:
+                raise RuntimeError(_bigquery_credentials_unavailable_message()) from e
+            raise
 
     @property
     def dialect(self) -> str:
