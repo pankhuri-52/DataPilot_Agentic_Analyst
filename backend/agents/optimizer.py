@@ -8,6 +8,7 @@ only optimizer_gate restarts (cheap); SQL generation and dry-run stay in optimiz
 import os
 import json
 import re
+from datetime import datetime, timezone
 from langgraph.types import interrupt
 
 from llm import get_gemini, invoke_with_retry
@@ -255,6 +256,41 @@ def run_optimizer_prepare(state: dict) -> dict:
         if regen_hint:
             qline = f"\nOriginal user question: {user_query}\n" if user_query else ""
             prompt = f"{prompt}\n\nCorrection — the user declined the previous SQL without running it:{qline}{regen_hint}\n"
+        relevance_hint = (state.get("relevance_check_hint") or "").strip()
+        if relevance_hint:
+            append_trace(
+                trace,
+                TraceEntry(
+                    agent="optimizer",
+                    status="info",
+                    message="Rewriting SQL — previous results failed relevance check...",
+                ).model_dump(),
+            )
+            prompt = (
+                f"{prompt}\n\n"
+                f"RELEVANCE FAILURE — CORRECTION REQUIRED:\n"
+                f"The previous SQL executed successfully but its results did not answer the user's question. "
+                f"{relevance_hint}\n"
+            )
+
+        execution_error = (state.get("execution_error") or "").strip()
+        if execution_error:
+            retry_num = state.get("executor_retry_count", 1)
+            append_trace(
+                trace,
+                TraceEntry(
+                    agent="optimizer",
+                    status="info",
+                    message=f"Rewriting SQL to fix execution error (retry {retry_num})...",
+                ).model_dump(),
+            )
+            prompt = (
+                f"{prompt}\n\n"
+                f"EXECUTION FAILURE — CORRECTION REQUIRED (retry {retry_num}):\n"
+                f"The SQL below was executed against the live database and was rejected. "
+                f"Rewrite it to fix the error while still answering the original question.\n\n"
+                f"{execution_error}\n"
+            )
         response = invoke_with_retry(llm, prompt)
         sql = clean_sql_text(response.content if hasattr(response, "content") else str(response))
 
@@ -381,6 +417,11 @@ def run_optimizer_prepare(state: dict) -> dict:
             "pending_execute_bytes": bytes_scanned,
             "pending_execute_cost": estimated_cost,
             "pending_execute_dialect": dialect,
+            # Stamped here so the checkpoint carries the interrupt creation time;
+            # graph_manager uses its own registry for fast O(1) lookups.
+            "interrupt_created_at": datetime.now(timezone.utc).isoformat(),
+            # Clear relevance hint once consumed so it doesn't re-trigger on subsequent passes.
+            "relevance_check_hint": None,
         }
         return _clear_regen_hint_if_retry(regen_hint, out)
 
@@ -423,8 +464,33 @@ def run_optimizer_gate(state: dict) -> dict:
     estimated_cost = state.get("pending_execute_cost")
     dialect = (state.get("pending_execute_dialect") or "bigquery").strip() or "bigquery"
 
+    # ── Max cost ceiling ─────────────────────────────────────────────────────────
+    _max_cost = float(os.getenv("MAX_QUERY_COST_USD", "10.0"))
+    if estimated_cost is not None and estimated_cost > _max_cost:
+        append_trace(
+            trace,
+            TraceEntry(
+                agent="optimizer",
+                status="error",
+                message=(
+                    f"Query blocked: estimated cost ${estimated_cost:.2f} exceeds the "
+                    f"${_max_cost:.2f} limit. Try narrowing your date range or filters."
+                ),
+            ).model_dump(),
+        )
+        return {
+            "trace": trace,
+            **_clear_pending_execute(),
+            "optimizer_decline_count": 0,
+            "optimizer_regenerate_hint": None,
+        }
+
+    # Auto-approve when the optimizer is rewriting SQL after an execution failure.
+    # We already asked the user once; interrupting them again for every correction attempt
+    # is poor UX.  The cost ceiling above still applies even in auto-approve mode.
+    execution_retry = bool((state.get("execution_error") or "").strip())
     skip_hil = os.getenv("DATAPILOT_SKIP_INTERRUPTS", "").strip().lower() in ("1", "true", "yes")
-    if skip_hil:
+    if skip_hil or execution_retry:
         approved = True
     else:
         cost_summary = None

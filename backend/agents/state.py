@@ -111,3 +111,10 @@ class DataPilotState(TypedDict, total=False):
     empty_result_reason: Optional[str]  # Contextual explanation when query returns 0 rows
     from_query_cache_adapt: Optional[bool]  # True when user chose Adapt (reuse cached SQL path)
     kb_result_preview: Optional[dict[str, Any]]  # {"rows": [...], "row_count": n} from KB when using Adapt
+    interrupt_created_at: Optional[str]  # ISO-8601 UTC; stamped by optimizer_prepare when a HITL interrupt is pending
+    # SQL self-correction loop: executor feeds failures back to optimizer_prepare for up to N retries.
+    execution_error: Optional[str]  # DB error + failed SQL snippet from last execution attempt; None on success
+    executor_retry_count: int  # Incremented per SQL execution failure; reset to 0 in initial_state each query
+    # Result relevance check: validator feeds a hint back to optimizer_prepare when results don't answer the question.
+    relevance_check_hint: Optional[str]  # Set by validator when LLM relevance check fails; cleared after optimizer consumes it
+    validator_retry_count: int  # Incremented per relevance failure; capped at 1 to avoid infinite loops

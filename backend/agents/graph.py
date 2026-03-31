@@ -2,7 +2,14 @@
 LangGraph orchestration – wires all agents into a state machine.
 Checkpointer is injected at app startup (PostgreSQL via lifespan, or MemorySaver fallback).
 """
+import os
 from typing import Any, Literal
+
+# Cap relevance-failure retries to prevent infinite validator → optimizer loops.
+_VALIDATOR_MAX_RETRIES = 1
+
+# Must match EXECUTOR_MAX_SQL_RETRIES in executor.py (both read the same env var).
+_EXECUTOR_MAX_SQL_RETRIES = int(os.getenv("EXECUTOR_MAX_SQL_RETRIES", "2"))
 
 from langgraph.graph import StateGraph, END
 
@@ -37,6 +44,31 @@ def route_after_discovery(state: DataPilotState) -> Literal["optimizer_prepare",
     if feasibility in ("full", "partial"):
         return "optimizer_prepare"
     return "__end__"
+
+
+def route_after_executor(state: DataPilotState) -> Literal["validator", "optimizer_prepare", "__end__"]:
+    """SQL self-correction loop.
+
+    - Success (raw_results is set): forward to validator.
+    - SQL error within retry budget: route back to optimizer_prepare with execution_error in state.
+    - Fatal error or budget exhausted: end the run.
+    """
+    if state.get("raw_results") is not None:
+        return "validator"
+    if state.get("execution_error") and state.get("executor_retry_count", 0) <= _EXECUTOR_MAX_SQL_RETRIES:
+        return "optimizer_prepare"
+    return "__end__"
+
+
+def route_after_validator(state: DataPilotState) -> Literal["visualization", "optimizer_prepare"]:
+    """Route to optimizer_prepare for a relevance-failure retry; otherwise proceed to visualization."""
+    if (
+        not state.get("validation_ok")
+        and state.get("relevance_check_hint")
+        and int(state.get("validator_retry_count") or 0) <= _VALIDATOR_MAX_RETRIES
+    ):
+        return "optimizer_prepare"
+    return "visualization"
 
 
 def route_after_optimizer_gate(state: DataPilotState) -> Literal["executor", "optimizer_prepare", "__end__"]:
@@ -84,8 +116,16 @@ def build_graph(checkpointer: Any):
             "__end__": END,
         },
     )
-    graph.add_edge("executor", "validator")
-    graph.add_edge("validator", "visualization")
+    graph.add_conditional_edges(
+        "executor",
+        route_after_executor,
+        {"validator": "validator", "optimizer_prepare": "optimizer_prepare", "__end__": END},
+    )
+    graph.add_conditional_edges(
+        "validator",
+        route_after_validator,
+        {"visualization": "visualization", "optimizer_prepare": "optimizer_prepare"},
+    )
     graph.add_edge("visualization", END)
 
     # Human-in-the-loop uses interrupt() inside optimizer_gate; do not add interrupt_before
@@ -112,5 +152,8 @@ def get_graph():
         except ImportError:
             from langgraph.checkpoint.memory import InMemorySaver as MemorySaver
 
-        _compiled_graph = build_graph(MemorySaver())
+        from agents import graph_manager
+        saver = MemorySaver()
+        graph_manager.set_memory_saver(saver)
+        _compiled_graph = build_graph(saver)
     return _compiled_graph

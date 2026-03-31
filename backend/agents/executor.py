@@ -20,6 +20,26 @@ FORBIDDEN_SQL_PATTERNS = re.compile(
     re.IGNORECASE,
 )
 
+# How many times the optimizer may regenerate SQL after a DB execution failure.
+_EXECUTOR_MAX_SQL_RETRIES = int(os.getenv("EXECUTOR_MAX_SQL_RETRIES", "2"))
+
+
+def _is_sql_execution_error(exc: BaseException) -> bool:
+    """Return True for SQL-level errors the optimizer might fix (syntax, bad column, type mismatch).
+    Return False for infrastructure errors where new SQL will not help (connection, auth, timeout).
+    """
+    name = type(exc).__name__.lower()
+    msg = str(exc).lower()
+    if any(k in name for k in ("connection", "operational", "interface", "timeout", "ssl")):
+        return False
+    if any(k in msg for k in (
+        "connection refused", "connection timed out", "connection reset",
+        "authentication failed", "permission denied", "access denied",
+        "ssl", "network error", "socket", "could not connect",
+    )):
+        return False
+    return True
+
 # Sample / CSV-imported KB SQL often uses this placeholder; substitute at execute time from .env.
 _KB_BQ_PROJECT_PLACEHOLDER = "__BIGQUERY_PROJECT__"
 
@@ -285,7 +305,7 @@ def run_executor(state: dict) -> dict:
             ).model_dump(),
         )
 
-        update = {"sql": sql, "raw_results": raw_results, "trace": trace}
+        update = {"sql": sql, "raw_results": raw_results, "execution_error": None, "trace": trace}
 
         # When the query returns 0 rows, always load warehouse date coverage so visualization can explain
         # empty results. (Planner often encodes years only in SQL — not in plan.filters — so we must not
@@ -299,8 +319,42 @@ def run_executor(state: dict) -> dict:
 
         return update
     except Exception as e:
+        retry_count = state.get("executor_retry_count", 0)
+        err_msg = str(e)
+        # Build error context: include a snippet of the failing SQL so the optimizer
+        # can see exactly what it generated and what the database rejected.
+        sql_preview = (sql or "")[:600] + ("..." if len(sql or "") > 600 else "")
+        error_detail = (
+            f"SQL that failed:\n{sql_preview}\n\nDatabase error:\n{err_msg}"
+            if sql_preview
+            else f"Database error:\n{err_msg}"
+        )
         append_trace(
             trace,
-            TraceEntry(agent="executor", status="error", message=str(e)).model_dump(),
+            TraceEntry(agent="executor", status="error", message=err_msg).model_dump(),
         )
-        return {"trace": trace}
+        if _is_sql_execution_error(e) and retry_count < _EXECUTOR_MAX_SQL_RETRIES:
+            # SQL-level error — send back to optimizer_prepare for correction.
+            append_trace(
+                trace,
+                TraceEntry(
+                    agent="executor",
+                    status="info",
+                    message=(
+                        f"SQL execution failed (attempt {retry_count + 1}/{_EXECUTOR_MAX_SQL_RETRIES + 1}). "
+                        "Sending error back to the optimizer for correction..."
+                    ),
+                ).model_dump(),
+            )
+            return {
+                "execution_error": error_detail,
+                "executor_retry_count": retry_count + 1,
+                "sql": None,  # Force optimizer_prepare to regenerate
+                "trace": trace,
+            }
+        # Infrastructure error or retry limit reached — surface the error and stop.
+        return {
+            "execution_error": error_detail,
+            "executor_retry_count": _EXECUTOR_MAX_SQL_RETRIES + 1,  # Sentinel: no more retries
+            "trace": trace,
+        }

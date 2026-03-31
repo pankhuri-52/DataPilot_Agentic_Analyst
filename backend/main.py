@@ -8,7 +8,7 @@ import os
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from fastapi import FastAPI, HTTPException, Body, Depends, Query
+from fastapi import FastAPI, HTTPException, Body, Depends, Query, Request
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -92,7 +92,10 @@ async def lifespan(app: FastAPI):
         from langgraph.checkpoint.memory import InMemorySaver as MemorySaver
 
     def _use_memory(reason: str) -> None:
-        set_compiled_graph(build_graph(MemorySaver()))
+        from agents import graph_manager
+        saver = MemorySaver()
+        graph_manager.set_memory_saver(saver)
+        set_compiled_graph(build_graph(saver))
         logger.warning("%s; using in-memory LangGraph checkpoints (interrupts lost on API restart).", reason)
 
     url = (os.getenv("POSTGRES_URL") or os.getenv("DATABASE_URL") or "").strip()
@@ -121,14 +124,24 @@ async def lifespan(app: FastAPI):
                 logger.warning(
                     "SUPABASE_SERVICE_ROLE_KEY is not set; chat list/save will fail until you add it (see README)."
                 )
-            yield
+            from agents import graph_manager as _gm
+            _gm.start_cleanup_task()
+            try:
+                yield
+            finally:
+                _gm.stop_cleanup_task()
     else:
         _use_memory("POSTGRES_URL / DATABASE_URL not set")
         if not os.getenv("SUPABASE_SERVICE_ROLE_KEY"):
             logger.warning(
                 "SUPABASE_SERVICE_ROLE_KEY is not set; chat list/save will fail until you add it (see README)."
             )
-        yield
+        from agents import graph_manager as _gm
+        _gm.start_cleanup_task()
+        try:
+            yield
+        finally:
+            _gm.stop_cleanup_task()
 
 
 app = FastAPI(
@@ -885,7 +898,14 @@ def ask(
         graph = get_graph()
         config = {"configurable": {"thread_id": thread_id}}
         rt = build_initial_runtime_state(user["id"] if user else None, source_id)
-        initial_state = {"query": query, "trace": [], "conversation_history": history, **rt}
+        initial_state = {
+            "query": query,
+            "trace": [],
+            "conversation_history": history,
+            "execution_error": None,
+            "executor_retry_count": 0,
+            **rt,
+        }
 
         try:
             result = graph.invoke(initial_state, config=config)
@@ -893,6 +913,8 @@ def ask(
             # LangGraph may raise on interrupt; check for interrupt in exception
             err_str = str(inv_err)
             if "interrupt" in err_str.lower() or "GraphInterrupt" in err_str:
+                from agents import graph_manager as _gm
+                _gm.register_interrupt(thread_id)
                 state_snapshot = graph.get_state(config)
                 state = state_snapshot.values if hasattr(state_snapshot, "values") else {}
                 out = {
@@ -916,6 +938,8 @@ def ask(
             # Extract interrupt payload (may be list of Interrupt objects)
             payload = interrupt_data[0].value if hasattr(interrupt_data[0], "value") else interrupt_data[0]
             if isinstance(payload, dict):
+                from agents import graph_manager as _gm
+                _gm.register_interrupt(thread_id)
                 merged = _merge_interrupt_client(result, payload)
                 out = {
                     "thread_id": thread_id,
@@ -934,6 +958,8 @@ def ask(
                         out["conversation_id"] = cid
                 return out
 
+        from agents import graph_manager as _gm
+        _gm.clear_interrupt(thread_id)
         response = _build_ask_response(result)
         response["thread_id"] = thread_id
 
@@ -964,6 +990,7 @@ async def _ask_stream_generator(
     user: dict | None,
     conversation_id: str | None,
     thread_id: str,
+    request: Request,
     conversation_history: list[dict] | None = None,
     resume: bool | dict | None = None,
     persist_query: str | None = None,
@@ -995,14 +1022,28 @@ async def _ask_stream_generator(
             from data_sources.runtime import build_initial_runtime_state
 
             rt = build_initial_runtime_state(user["id"] if user else None, source_id)
-            input_data = {"query": query, "trace": [], "conversation_history": history, **rt}
+            input_data = {
+                "query": query,
+                "trace": [],
+                "conversation_history": history,
+                "execution_error": None,
+                "executor_retry_count": 0,
+                **rt,
+            }
 
         # stream_mode includes "custom" so append_trace() can use get_stream_writer (used by LangGraph).
         # Do not yield SSE from custom "trace_progress" here: the next "values" chunk already contains
         # the same trace rows, and catch-up below would re-emit them — duplicating every substep in the UI.
+        client_disconnected = False
+        current_agent = "unknown"
         async for raw in graph.astream(
             input_data, config=config, stream_mode=["values", "custom"]
         ):
+            if await request.is_disconnected():
+                logger.info("Client disconnected — stopping pipeline for thread %s.", thread_id)
+                client_disconnected = True
+                break
+
             if isinstance(raw, tuple) and len(raw) == 2:
                 mode, data = raw
                 if mode == "custom":
@@ -1036,17 +1077,27 @@ async def _ask_stream_generator(
                     persisted = _save_user_turn_only(user["id"], conversation_id, query)
                     if persisted:
                         interrupt_event["conversation_id"] = persisted
+                from agents import graph_manager as _gm
+                _gm.register_interrupt(thread_id)
                 yield f"data: {json.dumps(interrupt_event)}\n\n"
                 return
 
             last_state = chunk
             trace = chunk.get("trace") or []
             # Catch-up for invoke() / tests without custom stream, or any missed lines
-            for i in range(prev_trace_len, len(trace)):
-                entry = trace[i]
-                event = {"type": "progress", "agent": entry.get("agent", ""), "trace_entry": entry}
-                yield f"data: {json.dumps(event)}\n\n"
-            prev_trace_len = len(trace)
+            try:
+                for i in range(prev_trace_len, len(trace)):
+                    entry = trace[i]
+                    current_agent = entry.get("agent") or current_agent
+                    event = {"type": "progress", "agent": current_agent, "trace_entry": entry}
+                    yield f"data: {json.dumps(event)}\n\n"
+                prev_trace_len = len(trace)
+            except Exception as chunk_err:
+                yield f"data: {json.dumps({'type': 'error', 'message': str(chunk_err), 'agent': current_agent})}\n\n"
+                return
+
+        if client_disconnected:
+            return
 
         # Resume paths (e.g. user declined execute) may finish without emitting a final "values" chunk;
         # without this, last_state stays None and the client never receives type=complete (infinite loading).
@@ -1096,6 +1147,8 @@ async def _ask_stream_generator(
                 if saved_conv_id:
                     response["conversation_id"] = saved_conv_id
             _maybe_index_query_kb(last_state, (query or "").strip() or (persist_query or "").strip())
+            from agents import graph_manager as _gm
+            _gm.clear_interrupt(thread_id)
             yield f"data: {json.dumps({'type': 'complete', 'response': response})}\n\n"
     except Exception as e:
         err_msg = str(e)
@@ -1106,11 +1159,12 @@ async def _ask_stream_generator(
                 "(2) Try GEMINI_MODEL=gemini-2.5-flash-lite in .env (may have separate quota), "
                 "(3) Enable billing at https://console.cloud.google.com for higher limits."
             )
-        yield f"data: {json.dumps({'type': 'error', 'message': err_msg})}\n\n"
+        yield f"data: {json.dumps({'type': 'error', 'message': err_msg, 'agent': current_agent})}\n\n"
 
 
 @app.post("/ask/stream")
 async def ask_stream(
+    request: Request,
     body: dict = Body(default={"query": ""}),
     user=Depends(get_current_user_optional),
 ):
@@ -1136,6 +1190,7 @@ async def ask_stream(
                 user,
                 conversation_id,
                 thread_id,
+                request,
                 conversation_history=history,
                 source_id=source_id,
             ),
@@ -1152,6 +1207,7 @@ async def ask_stream(
 
 @app.post("/ask/continue")
 async def ask_continue(
+    request: Request,
     body: dict = Body(default={"thread_id": ""}),
     user=Depends(get_current_user_optional),
 ):
@@ -1172,6 +1228,10 @@ async def ask_continue(
     if not thread_id:
         raise HTTPException(status_code=400, detail="thread_id is required")
 
+    # User is actively resuming — remove from stale-interrupt registry immediately.
+    from agents import graph_manager as _gm
+    _gm.clear_interrupt(thread_id)
+
     history = _get_conversation_history(user["id"] if user else "", conversation_id) if user else []
 
     try:
@@ -1181,6 +1241,7 @@ async def ask_continue(
                 user,
                 conversation_id,
                 thread_id,
+                request,
                 conversation_history=history,
                 resume=resume_val,
                 persist_query=original_query or None,

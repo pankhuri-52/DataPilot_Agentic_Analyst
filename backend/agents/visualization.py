@@ -82,6 +82,19 @@ Your job:
 """
 
 
+def _is_numeric(rows: list[dict], col: str) -> bool:
+    """Return True if the column contains numeric values in the given rows."""
+    for row in rows:
+        val = row.get(col)
+        if val is not None:
+            try:
+                float(val)
+                return True
+            except (TypeError, ValueError):
+                return False
+    return False
+
+
 def run_visualization(state: dict) -> dict:
     """Visualization Agent: produce chart_spec and explanation."""
     query = state.get("query", "")
@@ -216,6 +229,38 @@ def run_visualization(state: dict) -> dict:
             "y_field": result_dict.get("y_field"),
             "title": result_dict.get("title", "Results"),
         }
+
+        # Guardrail: validate x_field / y_field against actual result columns
+        result_columns = list(effective_results[0].keys()) if effective_results else []
+        result_columns_set = set(result_columns)
+        if result_columns_set:
+            if chart_spec.get("x_field") not in result_columns_set:
+                original_x = chart_spec["x_field"]
+                chart_spec["x_field"] = result_columns[0]
+                append_trace(
+                    trace,
+                    TraceEntry(
+                        agent="visualization",
+                        status="warning",
+                        message=f"x_field '{original_x}' not in result columns; falling back to '{chart_spec['x_field']}'",
+                    ).model_dump(),
+                )
+            if chart_spec.get("y_field") not in result_columns_set:
+                original_y = chart_spec["y_field"]
+                numeric_col = next(
+                    (c for c in result_columns if _is_numeric(effective_results, c)),
+                    result_columns[-1],
+                )
+                chart_spec["y_field"] = numeric_col
+                append_trace(
+                    trace,
+                    TraceEntry(
+                        agent="visualization",
+                        status="warning",
+                        message=f"y_field '{original_y}' not in result columns; falling back to '{chart_spec['y_field']}'",
+                    ).model_dump(),
+                )
+
         explanation = result_dict.get("explanation", "Here are the results.")
         answer_summary = result_dict.get("answer_summary") or explanation
         raw_fu = result_dict.get("follow_up_suggestions") or []
