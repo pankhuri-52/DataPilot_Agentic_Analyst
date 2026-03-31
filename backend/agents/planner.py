@@ -127,6 +127,30 @@ OUT_OF_SCOPE_MESSAGE = (
     "or rephrase your question to be about your business data."
 )
 
+PROMPT_INJECTION_MESSAGE = (
+    "I’m here to help you explore and analyze your data. "
+    "Please ask a question about the data in your connected warehouse or spreadsheet."
+)
+
+_INJECTION_PATTERNS = re.compile(
+    r"(ignore (previous|all|prior|above) instructions?"
+    r"|you are now"
+    r"|forget (everything|all|previous|prior|above)"
+    r"|pretend (you are|to be|that you)"
+    r"|act as (if|though)?"
+    r"|system prompt"
+    r"|<\|.*?\|>"
+    r"|###\s*instruction"
+    r"|override (your|all|previous) (instructions?|rules?|guidelines?)"
+    r"|disregard (previous|all|prior|above) (instructions?|rules?)"
+    r"|do not follow"
+    r"|new (role|persona|instructions?)"
+    r"|reveal (your|the) (prompt|instructions?|system)"
+    r"|output (your|the) (prompt|instructions?|system message)"
+    r")",
+    re.IGNORECASE,
+)
+
 PLANNER_PROMPT = """You are a data analytics planning agent. A business user has asked a question about their data.
 
 User question: {query}
@@ -313,6 +337,29 @@ def run_planner(state: dict) -> dict:
                 filters={},
                 is_valid=False,
                 clarifying_questions=["Please enter a question about your data (e.g. sales, revenue, orders)."],
+                execution_steps=[],
+            ).model_dump(),
+            "trace": trace,
+        }
+
+    # ── Prompt injection guard ───────────────────────────────────────────────────
+    if _INJECTION_PATTERNS.search(query):
+        append_trace(
+            trace,
+            TraceEntry(
+                agent="planner",
+                status="error",
+                message="Prompt injection attempt detected — query blocked",
+            ).model_dump(),
+        )
+        return {
+            "plan": AnalysisPlan(
+                metrics=[],
+                dimensions=[],
+                filters={},
+                is_valid=False,
+                query_scope="out_of_scope",
+                clarifying_questions=[PROMPT_INJECTION_MESSAGE],
                 execution_steps=[],
             ).model_dump(),
             "trace": trace,
