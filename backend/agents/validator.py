@@ -3,6 +3,7 @@ Validation Agent – sanity checks on query results.
 """
 from agents.state import TraceEntry
 from agents.trace_stream import append_trace
+from llm import get_gemini, invoke_with_retry
 
 _RELEVANCE_PROMPT = """You are a data quality checker. Your only job is to decide whether a SQL result set
 actually answers the user's question.
@@ -98,8 +99,6 @@ def run_validator(state: dict) -> dict:
 def _check_relevance(state: dict, raw_results: list, trace: list) -> tuple[bool, str | None]:
     """Run a lightweight LLM check: do these results actually answer the question?
     Returns (is_relevant, hint_for_optimizer_or_None)."""
-    from llm import get_gemini, invoke_with_retry
-
     query = state.get("query", "")
     sql = state.get("sql", "")
     sample = raw_results[:5]

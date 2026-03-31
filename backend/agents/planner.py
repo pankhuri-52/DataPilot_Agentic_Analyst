@@ -141,7 +141,7 @@ _INJECTION_PATTERNS = re.compile(
     r"|system prompt"
     r"|<\|.*?\|>"
     r"|###\s*instruction"
-    r"|override (your|all|previous) (instructions?|rules?|guidelines?)"
+    r"|override\s+(your\s+)?(all\s+|previous\s+)?(instructions?|rules?|guidelines?)"
     r"|disregard (previous|all|prior|above) (instructions?|rules?)"
     r"|do not follow"
     r"|new (role|persona|instructions?)"
@@ -213,6 +213,8 @@ When is_valid=false: set execution_steps to [].
 
 
 def _default_planner_detail(plan_dict: dict) -> str:
+    if plan_dict is None:
+        return "Define what to analyze from your question."
     parts: list[str] = []
     metrics = plan_dict.get("metrics") or []
     dimensions = plan_dict.get("dimensions") or []

@@ -182,12 +182,12 @@ def extract_referenced_tables_with_aliases(sql: str) -> list[tuple[str, str | No
         stmts = []
     for stmt in stmts or []:
         _extract_tables_sqlparse_recursive(stmt, out)
-    seen: set[tuple[str, str | None]] = set()
+    seen: set[str] = set()
     deduped: list[tuple[str, str | None]] = []
     for item in out:
-        k = (item[0].lower(), (item[1] or "").lower() if item[1] else None)
-        if k[0] and k not in seen:
-            seen.add(k)
+        name_lower = item[0].lower()
+        if name_lower and name_lower not in seen:
+            seen.add(name_lower)
             deduped.append(item)
     return deduped
 
