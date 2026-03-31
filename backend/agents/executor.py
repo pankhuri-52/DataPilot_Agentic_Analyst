@@ -7,6 +7,7 @@ import json
 import re
 from llm import get_gemini, invoke_with_retry
 from langfuse_setup import get_prompt
+from langfuse import observe, get_client as _get_langfuse_client
 from agents.state import TraceEntry
 from agents.context import get_effective_connector, get_effective_schema
 from agents.schema_utils import plan_result_limit_display, sql_row_limit_rule_5
@@ -114,6 +115,27 @@ Rules:
 6. Match SQL function to intent. If user asks for averages/mean, use AVG() (never SUM()).
 7. Return ONLY the SQL query, no explanation. No markdown code blocks.
 """
+
+
+@observe(name="sql-execution", as_type="span")
+def _run_sql(connector, sql: str):
+    _get_langfuse_client().update_current_span(
+        input={"sql": sql, "dialect": connector.dialect},
+    )
+    results = connector.execute(sql)
+    _get_langfuse_client().update_current_span(
+        output={"row_count": len(results)},
+    )
+    return results
+
+
+@observe(name="date-range-diagnostic", as_type="span")
+def _run_date_diagnostic(connector, schema: dict):
+    data_range, reason = connector.run_date_range_diagnostic(schema)
+    _get_langfuse_client().update_current_span(
+        output={"data_range": data_range, "reason": reason},
+    )
+    return data_range, reason
 
 
 def run_executor(state: dict) -> dict:
@@ -294,7 +316,7 @@ def run_executor(state: dict) -> dict:
                 return {"trace": trace}
             sql = _resolve_bigquery_project_in_sql(sql, project_id)
 
-        raw_results = connector.execute(sql)
+        raw_results = _run_sql(connector, sql)
 
         append_trace(
             trace,
@@ -312,7 +334,7 @@ def run_executor(state: dict) -> dict:
         # empty results. (Planner often encodes years only in SQL — not in plan.filters — so we must not
         # gate diagnostics on start_date/end_date/period keys.)
         if len(raw_results) == 0:
-            data_range, empty_result_reason = connector.run_date_range_diagnostic(schema)
+            data_range, empty_result_reason = _run_date_diagnostic(connector, schema)
             if data_range:
                 update["data_range"] = data_range
             if empty_result_reason:

@@ -118,3 +118,6 @@ class DataPilotState(TypedDict, total=False):
     # Result relevance check: validator feeds a hint back to optimizer_prepare when results don't answer the question.
     relevance_check_hint: Optional[str]  # Set by validator when LLM relevance check fails; cleared after optimizer consumes it
     validator_retry_count: int  # Incremented per relevance failure; capped at 1 to avoid infinite loops
+    # Dynamic orchestrator: set by run_orchestrator to communicate routing decision to the graph.
+    next_agent: Optional[str]  # Name of the agent to call next (or "END"); read by route_from_orchestrator
+    orchestrator_reasoning: Optional[str]  # LLM's reasoning for the routing decision (surfaced in trace)

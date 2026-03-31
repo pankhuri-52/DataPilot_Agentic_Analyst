@@ -17,8 +17,25 @@ from agents.query_kb_helpers import (
 from agents.context import get_effective_connector, get_effective_schema
 from agents.state import TraceEntry
 from agents.trace_stream import append_trace
+from langfuse import observe, get_client as _get_langfuse_client
 
 logger = logging.getLogger("datapilot.query_kb")
+
+
+@observe(name="kb-vector-search", as_type="span")
+def _kb_vector_search(match_text: str, dialect: str, fingerprint: str):
+    from embeddings import embed_text
+    from query_kb_store import match_similar_queries_with_relaxation
+
+    _get_langfuse_client().update_current_span(
+        input={"query": match_text, "dialect": dialect},
+    )
+    q_vec = embed_text(match_text, task_type="RETRIEVAL_QUERY")
+    rows, match_tag = match_similar_queries_with_relaxation(q_vec, dialect, fingerprint)
+    _get_langfuse_client().update_current_span(
+        output={"rows_found": len(rows), "match_tag": match_tag},
+    )
+    return rows, match_tag
 
 
 def _enabled() -> bool:
@@ -88,12 +105,7 @@ def run_query_kb(state: dict) -> dict:
     )
 
     try:
-        from embeddings import embed_text
-        from query_kb_store import match_similar_queries_with_relaxation
-
-        # Same task type as _maybe_index_query_kb so query and stored rows live in one space.
-        q_vec = embed_text(match_text, task_type="RETRIEVAL_QUERY")
-        rows, match_tag = match_similar_queries_with_relaxation(q_vec, dialect, fingerprint)
+        rows, match_tag = _kb_vector_search(match_text, dialect, fingerprint)
     except Exception as e:
         logger.warning("query_kb lookup failed: %s", e)
         append_trace(

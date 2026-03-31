@@ -13,6 +13,7 @@ from langgraph.types import interrupt
 
 from llm import get_gemini, invoke_with_retry
 from langfuse_setup import get_prompt
+from langfuse import observe, get_client as _get_langfuse_client
 from agents.state import TraceEntry
 from agents.context import get_effective_connector, get_effective_schema
 from agents.schema_utils import plan_result_limit_display, sql_row_limit_rule_5
@@ -104,6 +105,19 @@ Rules:
 """
 
 
+@observe(name="bq-dry-run-estimate", as_type="span")
+def _bq_dry_run(connector, sql: str):
+    _get_langfuse_client().update_current_span(
+        input={"sql": sql, "dialect": "bigquery"},
+    )
+    bytes_scanned, estimated_cost = connector.dry_run_estimate(sql)
+    _get_langfuse_client().update_current_span(
+        output={"bytes_scanned": bytes_scanned, "estimated_cost_usd": estimated_cost},
+    )
+    return bytes_scanned, estimated_cost
+
+
+@observe(name="postgres-size-estimate", as_type="span")
 def _postgres_estimate_bytes(connector, sql: str, schema: dict) -> int | None:
     """Estimate total bytes by summing pg_total_relation_size for tables in the SQL."""
     tables = extract_known_metadata_tables(sql, schema)
@@ -344,7 +358,7 @@ def run_optimizer_prepare(state: dict) -> dict:
         estimated_cost = None
         if dialect == "bigquery" and hasattr(connector, "dry_run_estimate"):
             try:
-                bytes_scanned, estimated_cost = connector.dry_run_estimate(sql)
+                bytes_scanned, estimated_cost = _bq_dry_run(connector, sql)
                 cost_msg = format_bigquery_cost_estimate_for_user(bytes_scanned, estimated_cost)
                 append_trace(
                     trace,
