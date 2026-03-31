@@ -5,6 +5,7 @@ Proceeds automatically when feasibility is full or partial (no user approval).
 import json
 
 from llm import get_gemini, invoke_with_retry
+from langfuse_setup import get_prompt
 from agents.state import DataFeasibility, TraceEntry
 from agents.context import get_effective_schema
 from agents.schema_utils import extract_data_ranges
@@ -97,7 +98,7 @@ def run_discovery(state: dict) -> dict:
     try:
         llm = get_gemini()
         structured_llm = llm.with_structured_output(DataFeasibility, method="json_mode")
-        prompt = DISCOVERY_PROMPT.format(
+        prompt = get_prompt("datapilot-discovery", DISCOVERY_PROMPT).format(
             metrics=metrics,
             dimensions=dimensions,
             filters=json.dumps(filters),

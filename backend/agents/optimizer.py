@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from langgraph.types import interrupt
 
 from llm import get_gemini, invoke_with_retry
+from langfuse_setup import get_prompt
 from agents.state import TraceEntry
 from agents.context import get_effective_connector, get_effective_schema
 from agents.schema_utils import plan_result_limit_display, sql_row_limit_rule_5
@@ -229,7 +230,7 @@ def run_optimizer_prepare(state: dict) -> dict:
         hints = state.get("runtime_connection_hints") or {}
         if dialect == "postgres":
             schema_name = hints.get("postgres_schema") or os.getenv("POSTGRES_SCHEMA", "public")
-            prompt = OPTIMIZER_PROMPT_POSTGRES.format(
+            prompt = get_prompt("datapilot-optimizer-postgres", OPTIMIZER_PROMPT_POSTGRES).format(
                 metrics=metrics,
                 dimensions=dimensions,
                 filters=json.dumps(filters),
@@ -242,7 +243,7 @@ def run_optimizer_prepare(state: dict) -> dict:
         else:
             project_id = hints.get("bigquery_project") or os.getenv("BIGQUERY_PROJECT_ID")
             dataset_id = hints.get("bigquery_dataset") or os.getenv("BIGQUERY_DATASET", "retail_data")
-            prompt = OPTIMIZER_PROMPT_BIGQUERY.format(
+            prompt = get_prompt("datapilot-optimizer-bigquery", OPTIMIZER_PROMPT_BIGQUERY).format(
                 metrics=metrics,
                 dimensions=dimensions,
                 filters=json.dumps(filters),

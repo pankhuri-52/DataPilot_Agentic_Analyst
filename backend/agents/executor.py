@@ -6,6 +6,7 @@ import os
 import json
 import re
 from llm import get_gemini, invoke_with_retry
+from langfuse_setup import get_prompt
 from agents.state import TraceEntry
 from agents.context import get_effective_connector, get_effective_schema
 from agents.schema_utils import plan_result_limit_display, sql_row_limit_rule_5
@@ -194,7 +195,7 @@ def run_executor(state: dict) -> dict:
         dialect = connector.dialect
         if dialect == "postgres":
             schema_name = hints.get("postgres_schema") or os.getenv("POSTGRES_SCHEMA", "public")
-            prompt = EXECUTOR_PROMPT_POSTGRES.format(
+            prompt = get_prompt("datapilot-executor-postgres", EXECUTOR_PROMPT_POSTGRES).format(
                 metrics=metrics,
                 dimensions=dimensions,
                 filters=json.dumps(filters),
@@ -204,7 +205,7 @@ def run_executor(state: dict) -> dict:
                 schema=schema_name,
             )
         else:
-            prompt = EXECUTOR_PROMPT_BIGQUERY.format(
+            prompt = get_prompt("datapilot-executor-bigquery", EXECUTOR_PROMPT_BIGQUERY).format(
                 metrics=metrics,
                 dimensions=dimensions,
                 filters=json.dumps(filters),

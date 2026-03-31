@@ -36,6 +36,8 @@ setup_logging()
 
 logger = logging.getLogger("datapilot")
 
+from langfuse_setup import flush_langfuse, merge_langfuse_into_graph_config
+
 
 def _auth_unexpected_error(exc: BaseException) -> HTTPException:
     """Turn missing deps / infra issues into actionable 503 messages."""
@@ -115,6 +117,7 @@ async def lifespan(app: FastAPI):
                         "SUPABASE_SERVICE_ROLE_KEY is not set; chat list/save will fail until you add it (see README)."
                     )
                 yield
+                flush_langfuse()
         except Exception:
             logger.exception(
                 "Failed to initialize PostgreSQL LangGraph checkpointer; falling back to in-memory."
@@ -130,6 +133,7 @@ async def lifespan(app: FastAPI):
                 yield
             finally:
                 _gm.stop_cleanup_task()
+                flush_langfuse()
     else:
         _use_memory("POSTGRES_URL / DATABASE_URL not set")
         if not os.getenv("SUPABASE_SERVICE_ROLE_KEY"):
@@ -142,6 +146,7 @@ async def lifespan(app: FastAPI):
             yield
         finally:
             _gm.stop_cleanup_task()
+            flush_langfuse()
 
 
 app = FastAPI(
@@ -896,7 +901,11 @@ def ask(
         from data_sources.runtime import build_initial_runtime_state
 
         graph = get_graph()
-        config = {"configurable": {"thread_id": thread_id}}
+        config = merge_langfuse_into_graph_config(
+            {"configurable": {"thread_id": thread_id}},
+            thread_id=thread_id,
+            user=user,
+        )
         rt = build_initial_runtime_state(user["id"] if user else None, source_id)
         initial_state = {
             "query": query,
@@ -1002,7 +1011,11 @@ async def _ask_stream_generator(
         from agents.graph import get_graph
 
         graph = get_graph()
-        config = {"configurable": {"thread_id": thread_id}}
+        config = merge_langfuse_into_graph_config(
+            {"configurable": {"thread_id": thread_id}},
+            thread_id=thread_id,
+            user=user,
+        )
         history = conversation_history or []
         prev_trace_len = 0
         last_state = None

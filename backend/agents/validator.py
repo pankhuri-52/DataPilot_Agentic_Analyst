@@ -4,6 +4,7 @@ Validation Agent – sanity checks on query results.
 from agents.state import TraceEntry
 from agents.trace_stream import append_trace
 from llm import get_gemini, invoke_with_retry
+from langfuse_setup import get_prompt
 
 _RELEVANCE_PROMPT = """You are a data quality checker. Your only job is to decide whether a SQL result set
 actually answers the user's question.
@@ -110,7 +111,7 @@ def _check_relevance(state: dict, raw_results: list, trace: list) -> tuple[bool,
 
     try:
         llm = get_gemini()
-        prompt = _RELEVANCE_PROMPT.format(query=query, sql=sql, sample=sample)
+        prompt = get_prompt("datapilot-validator-relevance", _RELEVANCE_PROMPT).format(query=query, sql=sql, sample=sample)
         response = invoke_with_retry(llm, prompt)
         text = (response.content if hasattr(response, "content") else str(response)).strip()
 

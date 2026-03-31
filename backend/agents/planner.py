@@ -6,6 +6,7 @@ stops and asks if they want to proceed with the available range instead.
 import json
 import re
 from llm import get_gemini, invoke_with_retry
+from langfuse_setup import get_prompt
 from agents.state import AnalysisPlan, TraceEntry
 from agents.trace_stream import append_trace
 from agents.context import get_effective_schema
@@ -462,7 +463,7 @@ def run_planner(state: dict) -> dict:
 
         llm = get_gemini()
         structured_llm = llm.with_structured_output(AnalysisPlan, method="json_mode")
-        prompt = PLANNER_PROMPT.format(
+        prompt = get_prompt("datapilot-planner", PLANNER_PROMPT).format(
             query=query,
             CONVERSATION_HISTORY_SECTION=history_section or "",
             SOURCES_SUMMARY_SECTION=sources_block,

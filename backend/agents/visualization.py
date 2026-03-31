@@ -3,6 +3,7 @@ Visualization & Explanation Agent – chart spec and natural language summary.
 """
 from pydantic import BaseModel, Field
 from llm import get_gemini, invoke_with_retry
+from langfuse_setup import get_prompt
 from agents.state import TraceEntry
 from agents.trace_stream import append_trace
 
@@ -165,7 +166,7 @@ def run_visualization(state: dict) -> dict:
         try:
             llm = get_gemini()
             structured_llm = llm.with_structured_output(VisualizationOutput, method="json_mode")
-            prompt = VIZ_PROMPT_EMPTY.format(
+            prompt = get_prompt("datapilot-viz-empty", VIZ_PROMPT_EMPTY).format(
                 query=query,
                 metrics=plan.get("metrics", []),
                 dimensions=plan.get("dimensions", []),
@@ -213,7 +214,7 @@ def run_visualization(state: dict) -> dict:
     try:
         llm = get_gemini()
         structured_llm = llm.with_structured_output(VisualizationOutput, method="json_mode")
-        prompt = VIZ_PROMPT.format(
+        prompt = get_prompt("datapilot-viz", VIZ_PROMPT).format(
             query=query,
             metrics=metrics,
             dimensions=dimensions,

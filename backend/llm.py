@@ -3,6 +3,7 @@ Gemini LLM for DataPilot
 Uses GOOGLE_API_KEY from .env
 """
 import concurrent.futures
+import contextvars
 import os
 
 from core.retry import retry_sync
@@ -48,11 +49,16 @@ def invoke_with_retry(llm, /, *args, **kwargs):
     immediately — it is not retried, because a hanging model won't recover on the next
     attempt.  executor.shutdown(wait=False) ensures we do not block waiting for the
     abandoned thread; it will finish whenever the underlying network connection closes.
+
+    LangChain propagates callbacks via contextvars; the worker thread must run inside
+    a copy of the caller context (e.g. for Langfuse CallbackHandler).
     """
+    ctx = contextvars.copy_context()
+
     def _call():
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         try:
-            future = executor.submit(llm.invoke, *args, **kwargs)
+            future = executor.submit(ctx.run, llm.invoke, *args, **kwargs)
             try:
                 return future.result(timeout=_LLM_TIMEOUT_SEC)
             except concurrent.futures.TimeoutError:

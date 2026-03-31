@@ -9,7 +9,11 @@ google-cloud-bigquery>=3.14.0
 
 # Gemini LLM
 langchain-core>=0.3.0 # engine for our lanchain
+langchain>=0.3.0 # required by langfuse LangChain CallbackHandler
 langchain-google-genai>=2.0.0 # Allows langchain to talk to Gemini
+
+# LLM observability + prompt management (Langfuse Cloud)
+langfuse>=2.0.0
 
 # SQL parsing (table allowlist / validation)
 sqlparse>=0.5.0
