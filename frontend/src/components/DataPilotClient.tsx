@@ -77,6 +77,54 @@ interface PendingInterrupt {
   cost_summary?: string;
 }
 
+const THINKING_PHRASES = [
+  "Thinking…",
+  "Pondering your request…",
+  "Understanding the data…",
+  "Planning the analysis…",
+  "Mapping the schema…",
+  "Formulating a strategy…",
+];
+const THINKING_DELAY_MS = 10000;
+const PHRASE_INTERVAL_MS = 1250;
+
+type ExecutionPlanPanelProps = React.ComponentProps<typeof ExecutionPlanPanel>;
+
+function ThinkingThenPlan(props: ExecutionPlanPanelProps) {
+  const wasLoadingOnMount = useRef(props.isLoading);
+  const [showPlan, setShowPlan] = useState(!props.isLoading);
+  const [phraseIdx, setPhraseIdx] = useState(0);
+
+  useEffect(() => {
+    if (!wasLoadingOnMount.current) return;
+    const phraseTimer = setInterval(
+      () => setPhraseIdx((i) => (i + 1) % THINKING_PHRASES.length),
+      PHRASE_INTERVAL_MS
+    );
+    const planTimer = setTimeout(() => {
+      setShowPlan(true);
+      clearInterval(phraseTimer);
+    }, THINKING_DELAY_MS);
+    return () => {
+      clearTimeout(planTimer);
+      clearInterval(phraseTimer);
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (!showPlan) {
+    return (
+      <div className="flex items-center gap-2.5 px-1 py-3 text-sm text-muted-foreground">
+        <Loader2 className="size-4 animate-spin shrink-0" />
+        <span key={phraseIdx} className="animate-in fade-in duration-300">
+          {THINKING_PHRASES[phraseIdx]}
+        </span>
+      </div>
+    );
+  }
+
+  return <ExecutionPlanPanel {...props} />;
+}
+
 function titleSourceType(sourceType: string): string {
   const key = sourceType.trim().toLowerCase();
   if (key === "bigquery") return "BigQuery";
@@ -944,7 +992,7 @@ export function DataPilotClient() {
                       <>
                         {clarifying && effectivePlan && <PlanCard plan={effectivePlan} />}
                         {showPanel && (
-                          <ExecutionPlanPanel
+                          <ThinkingThenPlan
                             key={message.id}
                             plan={effectivePlan}
                             liveTrace={trace}
