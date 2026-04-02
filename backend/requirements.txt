@@ -23,6 +23,7 @@ langgraph>=0.2.0
 langgraph-checkpoint-postgres>=2.0.0
 # AsyncPostgresSaver (psycopg v3); binary wheels include libpq on Windows
 psycopg[binary]>=3.1.0
+psycopg-pool>=3.1.0
 
 # Supabase (auth + chat persistence)
 supabase>=2.0.0

@@ -382,7 +382,7 @@ export function DataPilotClient() {
           headers,
           body: JSON.stringify(continueBody),
         },
-        { logLabel: "POST /ask/continue (stream)" }
+        { retriableStatuses: [], logLabel: "POST /ask/continue (stream)" }
       );
 
       if (!res.ok) {
@@ -640,7 +640,7 @@ export function DataPilotClient() {
             source_id: selectedDataSourceId,
           }),
         },
-        { logLabel: "POST /ask/stream" }
+        { retriableStatuses: [], logLabel: "POST /ask/stream" }
       );
 
       if (!res.ok) {
@@ -1069,7 +1069,7 @@ export function DataPilotClient() {
                                       })),
                                     }),
                                   },
-                                  { logLabel: "POST /chat/summarise-topic" }
+                                  { retriableStatuses: [], logLabel: "POST /chat/summarise-topic" }
                                 );
                                 if (!r.ok) return getPdfAnalyticalQuestion(messages, msgIndex);
                                 const data = (await r.json()) as { topic?: string };

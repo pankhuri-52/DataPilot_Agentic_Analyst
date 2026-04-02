@@ -6,11 +6,15 @@ pipeline state after every agent run and decides in real-time which agent to cal
 next. This makes the system a genuinely autonomous multi-agent architecture where
 routing authority lives with the LLM, not with static Python conditionals.
 """
+import os
+
 from pydantic import BaseModel, Field
 
 from agents.state import DataPilotState, TraceEntry
 from agents.trace_stream import append_trace
 from llm import get_gemini, invoke_with_retry
+from langfuse_setup import get_prompt
+from langfuse import get_client as _get_langfuse_client
 
 
 class OrchestratorDecision(BaseModel):
@@ -110,6 +114,8 @@ def run_orchestrator(state: DataPilotState) -> dict:
     """Orchestrator Agent: LLM-powered dynamic routing between pipeline agents."""
     trace = list(state.get("trace") or [])
     query = state.get("query") or ""
+    max_hops = max(4, int(os.getenv("DATAPILOT_MAX_PIPELINE_HOPS", "18")))
+    orchestrator_hops = sum(1 for entry in trace if entry.get("agent") == "orchestrator")
 
     # Extract which agents have already run from the trace (excluding orchestrator itself)
     agents_run = []
@@ -139,7 +145,7 @@ def run_orchestrator(state: DataPilotState) -> dict:
     validator_retry_count = int(state.get("validator_retry_count") or 0)
     from_cache = bool(state.get("from_query_cache_adapt") and state.get("sql"))
 
-    prompt = _ORCHESTRATOR_PROMPT.format(
+    prompt = get_prompt("datapilot-orchestrator", _ORCHESTRATOR_PROMPT).format(
         agents_description=agents_description,
         query=query,
         agents_run=agents_run if agents_run else ["(none yet)"],
@@ -158,23 +164,52 @@ def run_orchestrator(state: DataPilotState) -> dict:
         validator_retry_count=validator_retry_count,
     )
 
-    llm = get_gemini()
-    structured_llm = llm.with_structured_output(OrchestratorDecision, method="json_mode")
-
-    try:
-        decision: OrchestratorDecision = invoke_with_retry(structured_llm, prompt)
-        next_agent = decision.next.strip()
-        reasoning = decision.reasoning.strip()
-    except Exception as exc:
-        # Fallback: if LLM call fails, end the pipeline gracefully
+    if orchestrator_hops >= max_hops:
         next_agent = "END"
-        reasoning = f"Orchestrator error ({exc}); terminating pipeline."
+        reasoning = (
+            f"Reached orchestration safety cap ({orchestrator_hops}/{max_hops}) to prevent loop-driven retries."
+        )
+    else:
+        llm = get_gemini()
+        structured_llm = llm.with_structured_output(OrchestratorDecision, method="json_mode")
+        try:
+            decision: OrchestratorDecision = invoke_with_retry(structured_llm, prompt)
+            next_agent = decision.next.strip()
+            reasoning = decision.reasoning.strip()
+        except Exception as exc:
+            # Fallback: if LLM call fails, end the pipeline gracefully
+            next_agent = "END"
+            reasoning = f"Orchestrator error ({exc}); terminating pipeline."
 
     # Validate the chosen agent is a known name
     valid_names = set(_AVAILABLE_AGENTS.keys())
     if next_agent not in valid_names:
         next_agent = "END"
         reasoning = f"Orchestrator returned unknown agent name; terminating pipeline."
+
+    try:
+        _get_langfuse_client().update_current_span(
+            input={
+                "query": query,
+                "agents_already_run": agents_run,
+                "state_snapshot": {
+                    "from_cache": from_cache,
+                    "plan_valid": plan_valid,
+                    "data_feasibility": data_feasibility,
+                    "has_pending_sql": has_pending_sql,
+                    "sql_approved": sql_approved,
+                    "has_results": has_results,
+                    "validation_ok": validation_ok,
+                    "has_explanation": has_explanation,
+                    "execution_error": bool(execution_error),
+                    "executor_retry_count": executor_retry_count,
+                },
+            },
+            output={"next_agent": next_agent, "reasoning": reasoning},
+            metadata={"agent": "orchestrator"},
+        )
+    except Exception:
+        pass
 
     # Map "END" to LangGraph's internal sentinel
     langgraph_next = "__end__" if next_agent == "END" else next_agent

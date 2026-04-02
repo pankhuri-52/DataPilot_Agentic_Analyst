@@ -6,6 +6,7 @@ import json
 
 from llm import get_gemini, invoke_with_retry
 from langfuse_setup import get_prompt
+from langfuse import get_client as _get_langfuse_client
 from agents.state import DataFeasibility, TraceEntry
 from agents.context import get_effective_schema
 from agents.schema_utils import extract_data_ranges
@@ -119,6 +120,22 @@ def run_discovery(state: dict) -> dict:
             result_dict["nearest_plan"] = None
 
         tables_used = result_dict.get("tables_used", [])
+        try:
+            _get_langfuse_client().update_current_span(
+                input={
+                    "query": state.get("query", ""),
+                    "metrics": state.get("plan", {}).get("metrics", []) if state.get("plan") else [],
+                    "dimensions": state.get("plan", {}).get("dimensions", []) if state.get("plan") else [],
+                },
+                output={
+                    "feasibility": feasibility,
+                    "tables_used": tables_used,
+                    "missing_explanation": result_dict.get("missing_explanation"),
+                },
+                metadata={"agent": "discovery"},
+            )
+        except Exception:
+            pass
 
         feasibility_messages = {
             "full": "All requested metrics and dimensions are available in your connected data.",

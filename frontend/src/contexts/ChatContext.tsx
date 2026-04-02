@@ -110,6 +110,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     text: string;
   } | null>(null);
   const [selectedDataSourceId, setSelectedDataSourceIdState] = useState<string>("primary");
+  const conversationsInFlightRef = useRef<Promise<void> | null>(null);
+  const lastConversationsFetchAtRef = useRef<number>(0);
 
   useEffect(() => {
     try {
@@ -172,27 +174,41 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const fetchConversations = useCallback(async () => {
+    if (conversationsInFlightRef.current) {
+      return conversationsInFlightRef.current;
+    }
+    const now = Date.now();
+    if (now - lastConversationsFetchAtRef.current < 750) {
+      return;
+    }
     const token = getAccessToken();
     if (!token) return;
-    try {
-      const res = await fetchWithRetry(
-        `${API_BASE}/conversations`,
-        { headers: { Authorization: `Bearer ${token}` } },
-        { logLabel: "GET /conversations" }
-      );
-      if (res.ok) {
-        const data = await res.json();
-        const list = (data.conversations || []) as Conversation[];
-        setConversations(list.slice(0, CONVERSATIONS_UI_MAX));
-        const t = data.total;
-        setConversationsTotal(typeof t === "number" && Number.isFinite(t) ? t : list.length);
-        setConversationsError(null);
-      } else {
-        setConversationsError(await parseErrorDetail(res));
+    const run = (async () => {
+      try {
+        const res = await fetchWithRetry(
+          `${API_BASE}/conversations`,
+          { headers: { Authorization: `Bearer ${token}` } },
+          { logLabel: "GET /conversations" }
+        );
+        if (res.ok) {
+          const data = await res.json();
+          const list = (data.conversations || []) as Conversation[];
+          setConversations(list.slice(0, CONVERSATIONS_UI_MAX));
+          const t = data.total;
+          setConversationsTotal(typeof t === "number" && Number.isFinite(t) ? t : list.length);
+          setConversationsError(null);
+        } else {
+          setConversationsError(await parseErrorDetail(res));
+        }
+      } catch (e) {
+        setConversationsError(e instanceof Error ? e.message : "Failed to load conversations");
+      } finally {
+        lastConversationsFetchAtRef.current = Date.now();
+        conversationsInFlightRef.current = null;
       }
-    } catch (e) {
-      setConversationsError(e instanceof Error ? e.message : "Failed to load conversations");
-    }
+    })();
+    conversationsInFlightRef.current = run;
+    return run;
   }, [getAccessToken]);
 
   useEffect(() => {

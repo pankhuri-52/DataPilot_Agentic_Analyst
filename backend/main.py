@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import uuid
+import hashlib
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from fastapi import FastAPI, HTTPException, Body, Depends, Query, Request
@@ -30,6 +31,18 @@ if load_dotenv:
         load_dotenv(_backend_env, override=False)
 
 from core.logging_config import setup_logging
+from core.idempotency import (
+    acquire_in_flight,
+    get_cached_response,
+    release_in_flight,
+    set_cached_response,
+)
+from core.request_metrics import (
+    finish_request_metrics,
+    mark_quota_limited,
+    set_request_user,
+    start_request_metrics,
+)
 from api_deps import get_current_user_optional, require_user as _require_user
 
 setup_logging()
@@ -37,6 +50,41 @@ setup_logging()
 logger = logging.getLogger("datapilot")
 
 from langfuse_setup import flush_langfuse, merge_langfuse_into_graph_config
+
+
+def _request_id_from(request: Request) -> str:
+    rid = (request.headers.get("X-Request-ID") or "").strip()
+    return rid or str(uuid.uuid4())
+
+
+def _idempotency_key(
+    request: Request,
+    route: str,
+    user_id: str | None,
+    payload: dict,
+) -> str:
+    provided = (request.headers.get("Idempotency-Key") or "").strip()
+    uid = user_id or "anonymous"
+    if provided:
+        return f"{route}:{uid}:header:{provided}"
+    body = json.dumps(payload, sort_keys=True, default=str)
+    digest = hashlib.sha256(body.encode("utf-8")).hexdigest()[:24]
+    return f"{route}:{uid}:auto:{digest}"
+
+
+def _log_amplification_summary(summary: dict) -> None:
+    logger.info(
+        "amplification_summary request_id=%s method=%s path=%s status=%s duration_ms=%s user_id=%s quota_limited=%s counters=%s error=%s",
+        summary.get("request_id"),
+        summary.get("method"),
+        summary.get("path"),
+        summary.get("status_code"),
+        summary.get("duration_ms"),
+        summary.get("user_id"),
+        summary.get("quota_limited"),
+        summary.get("counters"),
+        summary.get("error"),
+    )
 
 
 def _auth_unexpected_error(exc: BaseException) -> HTTPException:
@@ -107,8 +155,18 @@ async def lifespan(app: FastAPI):
         url = sanitize_postgres_uri_for_psycopg2(url)
         try:
             from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+            from psycopg_pool import AsyncConnectionPool
 
-            async with AsyncPostgresSaver.from_conn_string(url, pipeline=False) as checkpointer:
+            pool = AsyncConnectionPool(
+                conninfo=url,
+                min_size=0,  # don't keep idle connections — Neon closes them after ~5 min
+                max_size=5,
+                open=False,
+                kwargs={"autocommit": True, "prepare_threshold": 0},
+            )
+            await pool.open()
+            try:
+                checkpointer = AsyncPostgresSaver(pool)
                 await checkpointer.setup()
                 set_compiled_graph(build_graph(checkpointer))
                 logger.info("LangGraph checkpointer: PostgreSQL (interrupts survive API restart).")
@@ -118,6 +176,8 @@ async def lifespan(app: FastAPI):
                     )
                 yield
                 flush_langfuse()
+            finally:
+                await pool.close()
         except Exception:
             logger.exception(
                 "Failed to initialize PostgreSQL LangGraph checkpointer; falling back to in-memory."
@@ -422,8 +482,28 @@ class SummariseTopicRequest(BaseModel):
 
 
 @app.post("/chat/summarise-topic")
-def summarise_topic(body: SummariseTopicRequest, user=Depends(_require_user)):
+def summarise_topic(request: Request, body: SummariseTopicRequest, user=Depends(_require_user)):
     """Derive a concise topic sentence from the user's messages for PDF export."""
+    request_id = _request_id_from(request)
+    token = start_request_metrics(request_id, "POST", "/chat/summarise-topic")
+    set_request_user(user["id"])
+    status_code = 200
+    error_detail = None
+    idem_key = _idempotency_key(
+        request,
+        "/chat/summarise-topic",
+        user["id"],
+        {"messages": body.messages[:24]},
+    )
+    cached = get_cached_response(idem_key)
+    if cached is not None:
+        cached["request_id"] = request_id
+        return cached
+    acquired = acquire_in_flight(idem_key, ttl_sec=120)
+    if not acquired:
+        status_code = 409
+        error_detail = "Duplicate /chat/summarise-topic request is already in progress."
+        raise HTTPException(status_code=409, detail=error_detail)
     try:
         user_texts = [
             m.get("content", "").strip()
@@ -431,7 +511,7 @@ def summarise_topic(body: SummariseTopicRequest, user=Depends(_require_user)):
             if m.get("role") == "user" and m.get("content", "").strip()
         ]
         if not user_texts:
-            return {"topic": ""}
+            return {"topic": "", "request_id": request_id}
         from llm import get_gemini, invoke_with_retry
 
         joined = "\n".join(f"- {t}" for t in user_texts[:12])
@@ -444,10 +524,22 @@ def summarise_topic(body: SummariseTopicRequest, user=Depends(_require_user)):
         llm = get_gemini()
         result = invoke_with_retry(llm, prompt)
         topic = (result.content if hasattr(result, "content") else str(result)).strip()
-        return {"topic": topic[:200]}
+        out = {"topic": topic[:200], "request_id": request_id}
+        set_cached_response(idem_key, out, ttl_sec=120)
+        return out
     except Exception as e:
+        status_code = 503
+        error_detail = str(e)
+        if "RESOURCE_EXHAUSTED" in error_detail or "429" in error_detail:
+            mark_quota_limited()
         logger.warning("summarise_topic failed: %s", e)
-        return {"topic": ""}
+        return {"topic": "", "request_id": request_id}
+    finally:
+        if acquired:
+            release_in_flight(idem_key)
+        _log_amplification_summary(
+            finish_request_metrics(token, status_code=status_code, error=error_detail)
+        )
 
 
 @app.get("/conversations/{conversation_id}/messages")
@@ -877,6 +969,7 @@ def _merge_interrupt_client(state: dict, payload: dict) -> dict:
 
 @app.post("/ask")
 def ask(
+    request: Request,
     body: dict = Body(default={"query": ""}),
     user=Depends(get_current_user_optional),
 ):
@@ -886,12 +979,41 @@ def ask(
     Optionally pass conversation_id and Authorization to persist chat.
     Uses thread_id for interrupt/resume; returns thread_id when interrupted.
     """
+    request_id = _request_id_from(request)
+    token = start_request_metrics(request_id, "POST", "/ask")
+    if user:
+        set_request_user(user["id"])
+    status_code = 200
+    error_detail = None
+
     query = (body or {}).get("query", "").strip()
     conversation_id = (body or {}).get("conversation_id")
     thread_id = (body or {}).get("thread_id") or str(uuid.uuid4())
     source_id = (body or {}).get("source_id")
     if not query:
-        raise HTTPException(status_code=400, detail="query is required")
+        status_code = 400
+        error_detail = "query is required"
+        raise HTTPException(status_code=400, detail=error_detail)
+    idem_key = _idempotency_key(
+        request,
+        "/ask",
+        user["id"] if user else None,
+        {
+            "query": query,
+            "thread_id": thread_id,
+            "conversation_id": conversation_id,
+            "source_id": source_id,
+        },
+    )
+    cached = get_cached_response(idem_key)
+    if cached is not None:
+        cached["request_id"] = request_id
+        return cached
+    acquired = acquire_in_flight(idem_key, ttl_sec=240)
+    if not acquired:
+        status_code = 409
+        error_detail = "Duplicate /ask request is already in progress for this key."
+        raise HTTPException(status_code=409, detail=error_detail)
 
     history = _get_conversation_history(user["id"] if user else "", conversation_id) if user else []
 
@@ -928,6 +1050,7 @@ def ask(
                 state = state_snapshot.values if hasattr(state_snapshot, "values") else {}
                 out = {
                     "thread_id": thread_id,
+                    "request_id": request_id,
                     "interrupt": {"reason": "unknown", "data": {}},
                     "trace": state.get("trace", []),
                     "plan": state.get("plan"),
@@ -938,6 +1061,7 @@ def ask(
                     cid = _save_user_turn_only(user["id"], conversation_id, query)
                     if cid:
                         out["conversation_id"] = cid
+                set_cached_response(idem_key, out, ttl_sec=90)
                 return out
             raise inv_err
 
@@ -952,6 +1076,7 @@ def ask(
                 merged = _merge_interrupt_client(result, payload)
                 out = {
                     "thread_id": thread_id,
+                    "request_id": request_id,
                     "interrupt": merged["data"],
                     "trace": merged["trace"],
                     "plan": merged["plan"],
@@ -965,12 +1090,14 @@ def ask(
                     cid = _save_user_turn_only(user["id"], conversation_id, query)
                     if cid:
                         out["conversation_id"] = cid
+                set_cached_response(idem_key, out, ttl_sec=90)
                 return out
 
         from agents import graph_manager as _gm
         _gm.clear_interrupt(thread_id)
         response = _build_ask_response(result)
         response["thread_id"] = thread_id
+        response["request_id"] = request_id
 
         _maybe_index_query_kb(result, query)
 
@@ -979,22 +1106,37 @@ def ask(
             if saved_conv_id:
                 response["conversation_id"] = saved_conv_id
 
+        set_cached_response(idem_key, response, ttl_sec=120)
         return response
     except ValueError as e:
+        status_code = 400
+        error_detail = str(e)
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
+        status_code = 503
         err_msg = str(e)
         if "RESOURCE_EXHAUSTED" in err_msg or "429" in err_msg:
+            mark_quota_limited()
             err_msg = (
                 "Gemini API quota exceeded. The free tier allows 20 requests per day. "
                 "Options: (1) Wait until your quota resets tomorrow, "
                 "(2) Try GEMINI_MODEL=gemini-2.5-flash-lite in .env (may have separate quota), "
                 "(3) Enable billing at https://console.cloud.google.com for higher limits."
             )
+        error_detail = err_msg
         raise HTTPException(status_code=503, detail=err_msg)
+    finally:
+        if acquired:
+            release_in_flight(idem_key)
+        _log_amplification_summary(
+            finish_request_metrics(token, status_code=status_code, error=error_detail)
+        )
 
 
 async def _ask_stream_generator(
+    request_id: str,
+    endpoint_path: str,
+    idempotency_key: str,
     query: str,
     user: dict | None,
     conversation_id: str | None,
@@ -1006,6 +1148,10 @@ async def _ask_stream_generator(
     source_id: str | None = None,
 ):
     """Async generator that yields SSE events for real-time agent progress. Handles interrupts."""
+    token = start_request_metrics(request_id, "POST", endpoint_path)
+    if user:
+        set_request_user(user["id"])
+    error_detail = None
     try:
         from langgraph.types import Command
         from agents.graph import get_graph
@@ -1083,6 +1229,7 @@ async def _ask_stream_generator(
                 merged = _merge_interrupt_client(state, payload)
                 interrupt_event = {
                     "type": "interrupt",
+                    "request_id": request_id,
                     "thread_id": thread_id,
                     **merged,
                 }
@@ -1102,11 +1249,17 @@ async def _ask_stream_generator(
                 for i in range(prev_trace_len, len(trace)):
                     entry = trace[i]
                     current_agent = entry.get("agent") or current_agent
-                    event = {"type": "progress", "agent": current_agent, "trace_entry": entry}
+                    event = {
+                        "type": "progress",
+                        "request_id": request_id,
+                        "agent": current_agent,
+                        "trace_entry": entry,
+                    }
                     yield f"data: {json.dumps(event)}\n\n"
                 prev_trace_len = len(trace)
             except Exception as chunk_err:
-                yield f"data: {json.dumps({'type': 'error', 'message': str(chunk_err), 'agent': current_agent})}\n\n"
+                error_detail = str(chunk_err)
+                yield f"data: {json.dumps({'type': 'error', 'request_id': request_id, 'message': str(chunk_err), 'agent': current_agent})}\n\n"
                 return
 
         if client_disconnected:
@@ -1125,6 +1278,7 @@ async def _ask_stream_generator(
         if last_state is not None:
             response = _build_ask_response(last_state)
             response["thread_id"] = thread_id
+            response["request_id"] = request_id
             if user:
                 eff_conv = conversation_id
                 if resume is not None:
@@ -1162,17 +1316,24 @@ async def _ask_stream_generator(
             _maybe_index_query_kb(last_state, (query or "").strip() or (persist_query or "").strip())
             from agents import graph_manager as _gm
             _gm.clear_interrupt(thread_id)
-            yield f"data: {json.dumps({'type': 'complete', 'response': response})}\n\n"
+            yield f"data: {json.dumps({'type': 'complete', 'request_id': request_id, 'response': response})}\n\n"
     except Exception as e:
         err_msg = str(e)
         if "RESOURCE_EXHAUSTED" in err_msg or "429" in err_msg:
+            mark_quota_limited()
             err_msg = (
                 "Gemini API quota exceeded. The free tier allows 20 requests per day. "
                 "Options: (1) Wait until your quota resets tomorrow, "
                 "(2) Try GEMINI_MODEL=gemini-2.5-flash-lite in .env (may have separate quota), "
                 "(3) Enable billing at https://console.cloud.google.com for higher limits."
             )
-        yield f"data: {json.dumps({'type': 'error', 'message': err_msg, 'agent': current_agent})}\n\n"
+        error_detail = err_msg
+        yield f"data: {json.dumps({'type': 'error', 'request_id': request_id, 'message': err_msg, 'agent': current_agent})}\n\n"
+    finally:
+        release_in_flight(idempotency_key)
+        _log_amplification_summary(
+            finish_request_metrics(token, status_code=200, error=error_detail)
+        )
 
 
 @app.post("/ask/stream")
@@ -1187,11 +1348,29 @@ async def ask_stream(
     When an interrupt occurs (table approval, execute confirmation), returns type: "interrupt" with thread_id.
     Use POST /ask/continue with that thread_id to resume.
     """
+    request_id = _request_id_from(request)
     query = (body or {}).get("query", "").strip()
     conversation_id = (body or {}).get("conversation_id")
     thread_id = (body or {}).get("thread_id") or str(uuid.uuid4())
     source_id = (body or {}).get("source_id")
+    idem_key = _idempotency_key(
+        request,
+        "/ask/stream",
+        user["id"] if user else None,
+        {
+            "query": query,
+            "thread_id": thread_id,
+            "conversation_id": conversation_id,
+            "source_id": source_id,
+        },
+    )
+    if not acquire_in_flight(idem_key, ttl_sec=600):
+        raise HTTPException(
+            status_code=409,
+            detail="Duplicate /ask/stream request is already in progress for this key.",
+        )
     if not query:
+        release_in_flight(idem_key)
         raise HTTPException(status_code=400, detail="query is required")
 
     history = _get_conversation_history(user["id"] if user else "", conversation_id) if user else []
@@ -1199,6 +1378,9 @@ async def ask_stream(
     try:
         return StreamingResponse(
             _ask_stream_generator(
+                request_id,
+                "/ask/stream",
+                idem_key,
                 query,
                 user,
                 conversation_id,
@@ -1212,9 +1394,11 @@ async def ask_stream(
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
                 "X-Accel-Buffering": "no",
+                "X-Request-ID": request_id,
             },
         )
     except Exception as e:
+        release_in_flight(idem_key)
         raise HTTPException(status_code=503, detail=f"Agent error: {str(e)}")
 
 
@@ -1229,6 +1413,7 @@ async def ask_continue(
     Pass thread_id from the interrupt event. Streams from the resume point.
     For query-cache hits, pass resume: { "kind": "query_cache_hit", "action": "full_pipeline" | "use_cached_sql" }.
     """
+    request_id = _request_id_from(request)
     thread_id = (body or {}).get("thread_id", "").strip()
     conversation_id = (body or {}).get("conversation_id")
     source_id = (body or {}).get("source_id")
@@ -1238,7 +1423,26 @@ async def ask_continue(
     else:
         resume_val = (body or {}).get("approved", True)
     original_query = (body or {}).get("original_query", "").strip()
+    idem_key = _idempotency_key(
+        request,
+        "/ask/continue",
+        user["id"] if user else None,
+        {
+            "thread_id": thread_id,
+            "conversation_id": conversation_id,
+            "source_id": source_id,
+            "resume": resume_payload,
+            "approved": (body or {}).get("approved", True),
+            "original_query": original_query,
+        },
+    )
+    if not acquire_in_flight(idem_key, ttl_sec=600):
+        raise HTTPException(
+            status_code=409,
+            detail="Duplicate /ask/continue request is already in progress for this key.",
+        )
     if not thread_id:
+        release_in_flight(idem_key)
         raise HTTPException(status_code=400, detail="thread_id is required")
 
     # User is actively resuming — remove from stale-interrupt registry immediately.
@@ -1250,6 +1454,9 @@ async def ask_continue(
     try:
         return StreamingResponse(
             _ask_stream_generator(
+                request_id,
+                "/ask/continue",
+                idem_key,
                 "",
                 user,
                 conversation_id,
@@ -1265,19 +1472,26 @@ async def ask_continue(
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
                 "X-Accel-Buffering": "no",
+                "X-Request-ID": request_id,
             },
         )
     except Exception as e:
+        release_in_flight(idem_key)
         raise HTTPException(status_code=503, detail=f"Agent error: {str(e)}")
 
 
 # First API endpoint – Gemini test ----
 @app.post("/llm/chat")
-def llm_chat(body: dict = Body(default={"message": "Hello! What can you help me with?"})):
+def llm_chat(request: Request, body: dict = Body(default={"message": "Hello! What can you help me with?"})):
     """
     Basic Gemini test: send a message, get a reply.
     Flow: Frontend/Postman → POST /llm/chat → this function → llm.get_gemini() → Gemini API → response.
     """
+
+    request_id = _request_id_from(request)
+    token = start_request_metrics(request_id, "POST", "/llm/chat")
+    status_code = 200
+    error_detail = None
 
     # If there is no message, use the default message
     message = (body or {}).get("message", "Hello! What can you help me with?")
@@ -1287,10 +1501,21 @@ def llm_chat(body: dict = Body(default={"message": "Hello! What can you help me 
         model = get_gemini()
         response = invoke_with_retry(model, message)
         content = response.content if hasattr(response, "content") else str(response)
-        return {"reply": content}
+        return {"reply": content, "request_id": request_id}
         # print("Calling llm_chat api")
         # return {"reply": "Hello! What can you help me with?"}
     except ValueError as e:
+        status_code = 400
+        error_detail = str(e)
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=503, detail=f"LLM error: {str(e)}")
+        status_code = 503
+        err_msg = str(e)
+        if "RESOURCE_EXHAUSTED" in err_msg or "429" in err_msg:
+            mark_quota_limited()
+        error_detail = f"LLM error: {err_msg}"
+        raise HTTPException(status_code=503, detail=error_detail)
+    finally:
+        _log_amplification_summary(
+            finish_request_metrics(token, status_code=status_code, error=error_detail)
+        )

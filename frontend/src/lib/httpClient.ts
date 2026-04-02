@@ -38,9 +38,12 @@ export async function fetchWithRetry(
   const maxAttempts = opts?.maxAttempts ?? 5;
   const baseDelayMs = opts?.baseDelayMs ?? 400;
   const maxDelayMs = opts?.maxDelayMs ?? 30_000;
+  const method = (init?.method || "GET").toUpperCase();
+  const isIdempotentMethod =
+    method === "GET" || method === "HEAD" || method === "OPTIONS";
   const retriable =
     opts?.retriableStatuses === undefined
-      ? DEFAULT_RETRIABLE_STATUSES
+      ? (isIdempotentMethod ? DEFAULT_RETRIABLE_STATUSES : [])
       : opts.retriableStatuses;
   const label = opts?.logLabel ?? String(input).slice(0, 120);
 

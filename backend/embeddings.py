@@ -9,6 +9,7 @@ import os
 import urllib.error
 import urllib.request
 
+from core.request_metrics import increment_counter
 from core.retry import retry_sync
 
 logger = logging.getLogger("datapilot.embeddings")
@@ -59,6 +60,7 @@ def embed_text(text: str, *, task_type: str = "RETRIEVAL_QUERY") -> list[float]:
     body_bytes = json.dumps(body).encode("utf-8")
 
     def _call():
+        increment_counter("embedding_attempts", 1)
         req = urllib.request.Request(
             url,
             data=body_bytes,

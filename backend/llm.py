@@ -6,6 +6,7 @@ import concurrent.futures
 import contextvars
 import os
 
+from core.request_metrics import increment_counter
 from core.retry import retry_sync
 
 # Few retries for real network blips only; quota errors do not retry (see core.retry).
@@ -34,10 +35,10 @@ def get_gemini():
         )
     from langchain_google_genai import ChatGoogleGenerativeAI
 
-    # gemini-2.5-flash-lite uses less quota; gemini-2.5-flash free tier = 20 req/day
-    model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
+    # gemini-2.0-flash: 1500 req/day free tier. Override with GEMINI_MODEL env var.
+    model = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
     # Retries: use invoke_with_retry (exponential backoff) instead of LangChain's internal retries.
-    return ChatGoogleGenerativeAI(model=model, api_key=api_key, max_retries=0)
+    return ChatGoogleGenerativeAI(model=model, api_key=api_key, max_retries=1)
 
 
 def invoke_with_retry(llm, /, *args, **kwargs):
@@ -56,9 +57,25 @@ def invoke_with_retry(llm, /, *args, **kwargs):
     ctx = contextvars.copy_context()
 
     def _call():
+        increment_counter("llm_invoke_attempts", 1)
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         try:
-            future = executor.submit(ctx.run, llm.invoke, *args, **kwargs)
+            def _invoke_and_link():
+                result = llm.invoke(*args, **kwargs)
+                # Link the LangFuse prompt client to this generation span while it is
+                # still the active span — this populates the Observations counter in
+                # the LangFuse Prompt Management UI.
+                try:
+                    from langfuse_setup import consume_pending_prompt_client
+                    from langfuse import get_client
+                    pending = consume_pending_prompt_client()
+                    if pending is not None:
+                        get_client().update_current_generation(prompt=pending)
+                except Exception:
+                    pass
+                return result
+
+            future = executor.submit(ctx.run, _invoke_and_link)
             try:
                 return future.result(timeout=_LLM_TIMEOUT_SEC)
             except concurrent.futures.TimeoutError:

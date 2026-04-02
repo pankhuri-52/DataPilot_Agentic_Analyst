@@ -147,7 +147,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ refresh_token: refreshToken }),
         },
-        { logLabel: "POST /auth/refresh" }
+        { retriableStatuses: [], logLabel: "POST /auth/refresh" }
       );
       const refreshData = await refreshRes.json().catch(() => ({}));
       if (
@@ -186,7 +186,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ email, password }),
           },
-          { logLabel: "POST /auth/login" }
+          { retriableStatuses: [], logLabel: "POST /auth/login" }
         );
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
@@ -216,7 +216,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ email, password, name: name || undefined }),
           },
-          { logLabel: "POST /auth/signup" }
+          { retriableStatuses: [], logLabel: "POST /auth/signup" }
         );
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {

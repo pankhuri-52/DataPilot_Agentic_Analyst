@@ -4,6 +4,7 @@ Visualization & Explanation Agent – chart spec and natural language summary.
 from pydantic import BaseModel, Field
 from llm import get_gemini, invoke_with_retry
 from langfuse_setup import get_prompt
+from langfuse import get_client as _get_langfuse_client
 from agents.state import TraceEntry
 from agents.trace_stream import append_trace
 
@@ -266,6 +267,19 @@ def run_visualization(state: dict) -> dict:
         answer_summary = result_dict.get("answer_summary") or explanation
         raw_fu = result_dict.get("follow_up_suggestions") or []
         follow_up = [str(x) for x in raw_fu if x][:5]
+        try:
+            _get_langfuse_client().update_current_span(
+                input={"query": query, "row_count": len(effective_results)},
+                output={
+                    "chart_type": chart_spec.get("chart_type"),
+                    "chart_title": chart_spec.get("title"),
+                    "answer_summary": answer_summary,
+                    "follow_up_suggestions": follow_up,
+                },
+                metadata={"agent": "visualization"},
+            )
+        except Exception:
+            pass
 
         append_trace(
             trace,

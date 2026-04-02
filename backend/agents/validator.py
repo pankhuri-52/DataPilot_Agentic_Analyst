@@ -5,6 +5,7 @@ from agents.state import TraceEntry
 from agents.trace_stream import append_trace
 from llm import get_gemini, invoke_with_retry
 from langfuse_setup import get_prompt
+from langfuse import get_client as _get_langfuse_client
 
 _RELEVANCE_PROMPT = """You are a data quality checker. Your only job is to decide whether a SQL result set
 actually answers the user's question.
@@ -94,6 +95,14 @@ def run_validator(state: dict) -> dict:
                 "trace": trace,
             }
 
+    try:
+        _get_langfuse_client().update_current_span(
+            input={"query": state.get("query", ""), "row_count": len(raw_results) if raw_results else 0},
+            output={"validation_ok": validation_ok, "issues": issues},
+            metadata={"agent": "validator"},
+        )
+    except Exception:
+        pass
     return {"validation_ok": validation_ok, "trace": trace}
 
 

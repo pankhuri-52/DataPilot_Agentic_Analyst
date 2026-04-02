@@ -270,7 +270,7 @@ export default function SourcesPage() {
             label: pgLabel.trim() || "PostgreSQL",
           }),
         },
-        { logLabel: "POST /data-sources/connect/postgres" }
+        { retriableStatuses: [], logLabel: "POST /data-sources/connect/postgres" }
       );
 
     try {
@@ -330,7 +330,7 @@ export default function SourcesPage() {
             service_account_json: parsed,
           }),
         },
-        { logLabel: "POST /data-sources/connect/bigquery" }
+        { retriableStatuses: [], logLabel: "POST /data-sources/connect/bigquery" }
       );
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {

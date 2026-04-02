@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect } from "react";
 import { AppPageShell } from "@/components/AppPageShell";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -19,14 +18,7 @@ export default function ChatsPage() {
     conversationsTotal,
     currentConversationId,
     loadConversation,
-    fetchConversations,
   } = useChat();
-
-  useEffect(() => {
-    if (user) {
-      fetchConversations();
-    }
-  }, [user, fetchConversations]);
 
   const handleSelectChat = (convId: string) => {
     loadConversation(convId);

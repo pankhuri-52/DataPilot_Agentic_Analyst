@@ -7,6 +7,7 @@ import json
 import re
 from llm import get_gemini, invoke_with_retry
 from langfuse_setup import get_prompt
+from langfuse import get_client as _get_langfuse_client
 from agents.state import AnalysisPlan, TraceEntry
 from agents.trace_stream import append_trace
 from agents.context import get_effective_schema
@@ -483,6 +484,21 @@ def run_planner(state: dict) -> dict:
 
         plan_dict = plan.model_dump() if hasattr(plan, "model_dump") else plan
         scope = (plan_dict.get("query_scope") or "").strip().lower()
+        try:
+            _get_langfuse_client().update_current_span(
+                input={"query": query},
+                output={
+                    "is_valid": plan_dict.get("is_valid"),
+                    "query_scope": scope,
+                    "metrics": plan_dict.get("metrics", []),
+                    "dimensions": plan_dict.get("dimensions", []),
+                    "filters": plan_dict.get("filters", {}),
+                    "clarifying_questions": plan_dict.get("clarifying_questions", []),
+                },
+                metadata={"agent": "planner"},
+            )
+        except Exception:
+            pass
         if not plan_dict.get("is_valid") and scope == "out_of_scope":
             plan_dict["clarifying_questions"] = [OUT_OF_SCOPE_MESSAGE]
         elif not plan_dict.get("is_valid") and scope not in ("out_of_scope", "needs_clarification", "data_question"):

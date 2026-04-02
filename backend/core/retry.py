@@ -8,6 +8,8 @@ import time
 from collections.abc import Callable
 from typing import TypeVar
 
+from core.request_metrics import increment_counter, mark_quota_limited
+
 T = TypeVar("T")
 
 logger = logging.getLogger("datapilot.retry")
@@ -95,10 +97,21 @@ def retry_sync(
     last_exc: BaseException | None = None
     for attempt in range(1, max_attempts + 1):
         try:
+            increment_counter("retry_attempts_total", 1)
+            if operation.startswith("supabase.chat.") and (
+                ".create_" in operation or ".update_" in operation
+            ):
+                increment_counter("supabase_write_attempts", 1)
+            elif operation.startswith("user_data_sources.") and (
+                ".insert" in operation or ".update" in operation or ".delete" in operation
+            ):
+                increment_counter("supabase_write_attempts", 1)
             return fn()
         except BaseException as e:
             last_exc = e
             if _is_quota_or_usage_exhausted(e):
+                mark_quota_limited()
+                increment_counter("upstream_quota_errors", 1)
                 logger.warning("%s: quota / usage limit — not retrying: %s", operation, e)
                 raise
             if not _is_transient_error(e):

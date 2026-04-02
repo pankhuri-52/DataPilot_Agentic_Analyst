@@ -90,8 +90,8 @@ def introspect_postgres(
     connection_url: str | None = None,
     connect_kwargs: dict[str, Any] | None = None,
     include_samples: bool = False,
-    sample_row_limit: int = 50,
-    max_tables_sampled: int = 20,
+    sample_row_limit: int = 25,
+    max_tables_sampled: int = 8,
 ) -> dict[str, Any]:
     import psycopg2
     from psycopg2.extras import RealDictCursor
@@ -198,8 +198,8 @@ def introspect_bigquery(
     client: Any,
     *,
     include_samples: bool = False,
-    sample_row_limit: int = 50,
-    max_tables_sampled: int = 25,
+    sample_row_limit: int = 25,
+    max_tables_sampled: int = 8,
 ) -> dict[str, Any]:
     from google.cloud import bigquery
 

@@ -17,6 +17,19 @@ def _demo_postgres_database() -> str:
     return (os.getenv("DEMO_POSTGRES_DB") or os.getenv("DEMO_POSTGRES_DATABASE") or "").strip()
 
 
+def _introspect_include_samples() -> bool:
+    raw = (os.getenv("DATAPILOT_INTROSPECT_INCLUDE_SAMPLES") or "false").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
+def _introspect_sample_row_limit() -> int:
+    return max(5, min(int(os.getenv("DATAPILOT_INTROSPECT_SAMPLE_ROW_LIMIT", "25")), 200))
+
+
+def _introspect_max_tables() -> int:
+    return max(1, min(int(os.getenv("DATAPILOT_INTROSPECT_MAX_TABLES", "8")), 50))
+
+
 @router.get("/demo-postgres-fields")
 def demo_postgres_fields():
     """Non-secret + masked password for read-only demo form (values from env)."""
@@ -71,7 +84,13 @@ def connect_demo_postgres(user=Depends(require_user)):
         from data_sources.introspect import introspect_postgres, schema_fingerprint
         from data_sources.service import find_source_by_type, insert_source, update_source
 
-        catalog = introspect_postgres(schema, connect_kwargs=connect_kwargs, include_samples=True)
+        catalog = introspect_postgres(
+            schema,
+            connect_kwargs=connect_kwargs,
+            include_samples=_introspect_include_samples(),
+            sample_row_limit=_introspect_sample_row_limit(),
+            max_tables_sampled=_introspect_max_tables(),
+        )
         fp = schema_fingerprint(catalog)
         enc = encrypt_config({**connect_kwargs, "schema": schema})
         existing = find_source_by_type(user["id"], "postgres")
@@ -114,7 +133,13 @@ def connect_postgres(body: dict = Body(default_factory=dict), user=Depends(requi
         from data_sources.introspect import introspect_postgres, schema_fingerprint
         from data_sources.service import find_source_by_type, insert_source, update_source
 
-        catalog = introspect_postgres(schema, connection_url=connection_url, include_samples=True)
+        catalog = introspect_postgres(
+            schema,
+            connection_url=connection_url,
+            include_samples=_introspect_include_samples(),
+            sample_row_limit=_introspect_sample_row_limit(),
+            max_tables_sampled=_introspect_max_tables(),
+        )
         fp = schema_fingerprint(catalog)
         enc = encrypt_config({"connection_url": connection_url, "schema": schema})
         existing = find_source_by_type(user["id"], "postgres")
@@ -170,7 +195,14 @@ def connect_bigquery(body: dict = Body(default_factory=dict), user=Depends(requi
         from data_sources.introspect import introspect_bigquery, schema_fingerprint
         from data_sources.service import insert_source
 
-        catalog = introspect_bigquery(project_id, dataset_id, client, include_samples=True)
+        catalog = introspect_bigquery(
+            project_id,
+            dataset_id,
+            client,
+            include_samples=_introspect_include_samples(),
+            sample_row_limit=_introspect_sample_row_limit(),
+            max_tables_sampled=_introspect_max_tables(),
+        )
         fp = schema_fingerprint(catalog)
         enc = encrypt_config(
             {"project_id": project_id, "dataset_id": dataset_id, "credentials_json": sa},
@@ -306,7 +338,13 @@ def refresh_schema(source_id: str, user=Depends(require_user)):
             url = cfg["connection_url"]
             schema = cfg.get("schema") or "public"
             table = cfg.get("table")
-            full = introspect_postgres(schema, connection_url=url, include_samples=True)
+            full = introspect_postgres(
+                schema,
+                connection_url=url,
+                include_samples=_introspect_include_samples(),
+                sample_row_limit=_introspect_sample_row_limit(),
+                max_tables_sampled=_introspect_max_tables(),
+            )
             if table:
                 tables = [t for t in (full.get("tables") or []) if t.get("name") == table]
                 catalog = {**full, "tables": tables, "description": row.get("label") or full.get("description")}
@@ -322,12 +360,24 @@ def refresh_schema(source_id: str, user=Depends(require_user)):
                     "user": cfg["user"],
                     "password": cfg.get("password") or "",
                 }
-                catalog = introspect_postgres(schema, connect_kwargs=kw, include_samples=True)
+                catalog = introspect_postgres(
+                    schema,
+                    connect_kwargs=kw,
+                    include_samples=_introspect_include_samples(),
+                    sample_row_limit=_introspect_sample_row_limit(),
+                    max_tables_sampled=_introspect_max_tables(),
+                )
             else:
                 url = cfg.get("connection_url")
                 if not url:
                     raise HTTPException(status_code=400, detail="Missing connection_url or host/dbname in config")
-                catalog = introspect_postgres(schema, connection_url=url, include_samples=True)
+                catalog = introspect_postgres(
+                    schema,
+                    connection_url=url,
+                    include_samples=_introspect_include_samples(),
+                    sample_row_limit=_introspect_sample_row_limit(),
+                    max_tables_sampled=_introspect_max_tables(),
+                )
         elif st == "bigquery":
             sa = cfg.get("credentials_json")
             if isinstance(sa, str):
@@ -338,7 +388,12 @@ def refresh_schema(source_id: str, user=Depends(require_user)):
             creds = service_account.Credentials.from_service_account_info(sa)
             client = bigquery.Client(project=cfg["project_id"], credentials=creds)
             catalog = introspect_bigquery(
-                cfg["project_id"], cfg["dataset_id"], client, include_samples=True
+                cfg["project_id"],
+                cfg["dataset_id"],
+                client,
+                include_samples=_introspect_include_samples(),
+                sample_row_limit=_introspect_sample_row_limit(),
+                max_tables_sampled=_introspect_max_tables(),
             )
         else:
             raise HTTPException(status_code=400, detail=f"Unknown source_type {st}")

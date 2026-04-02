@@ -11,6 +11,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
+from core.request_metrics import increment_counter
 from db.connector import DatabaseConnector
 
 logger = logging.getLogger("datapilot")
@@ -355,6 +356,7 @@ class BigQueryConnector(DatabaseConnector):
         from google.cloud import bigquery
 
         client = self._client()
+        increment_counter("bigquery_query_calls", 1)
         query_job = client.query(sql)
         rows = list(query_job.result(max_results=1000))
         return [{k: _serialize(v) for k, v in dict(row).items()} for row in rows]
@@ -369,6 +371,7 @@ class BigQueryConnector(DatabaseConnector):
 
         client = self._client()
         job_config = bigquery.QueryJobConfig(dry_run=True, use_query_cache=False)
+        increment_counter("bigquery_query_calls", 1)
         query_job = client.query(sql, job_config=job_config)
         bytes_processed = query_job.total_bytes_processed or 0
         # $5 per TiB = $5 / (1024**4) per byte
@@ -379,6 +382,8 @@ class BigQueryConnector(DatabaseConnector):
         date_cols = _get_date_columns(schema)
         if not date_cols:
             return None, "No date columns found in schema for diagnostic."
+        max_diag_cols = max(1, int(os.getenv("DATAPILOT_DIAGNOSTIC_MAX_DATE_COLUMNS", "6")))
+        date_cols = date_cols[:max_diag_cols]
 
         from google.cloud import bigquery
 
@@ -389,6 +394,7 @@ class BigQueryConnector(DatabaseConnector):
             table_ref = f"`{self.project_id}.{self.dataset_id}.{table_name}`"
             try:
                 diag_sql = f"SELECT MIN({col_name}) as min_val, MAX({col_name}) as max_val FROM {table_ref}"
+                increment_counter("bigquery_query_calls", 1)
                 job = client.query(diag_sql)
                 rows = list(job.result(max_results=1))
                 if rows and rows[0].min_val is not None and rows[0].max_val is not None:
