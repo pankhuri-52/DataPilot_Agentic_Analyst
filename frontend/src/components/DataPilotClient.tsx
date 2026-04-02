@@ -127,7 +127,7 @@ function hasClarifyingQuestions(plan?: Record<string, unknown>): boolean {
 }
 
 export function DataPilotClient() {
-  const { user, getAccessToken } = useAuth();
+  const { user, getAccessToken, refreshAccessToken } = useAuth();
   const {
     messages,
     patchMessages,
@@ -232,12 +232,19 @@ export function DataPilotClient() {
     if (selectedDataSourceId) {
       suggestedUrl.searchParams.set("source_id", selectedDataSourceId);
     }
-    fetchWithRetry(
-      suggestedUrl.toString(),
-      { headers: { Authorization: `Bearer ${token}` } },
-      { logLabel: "GET /conversations/suggested-questions" }
-    )
-      .then(async (res) => {
+    const doFetch = async (authToken: string) =>
+      fetchWithRetry(
+        suggestedUrl.toString(),
+        { headers: { Authorization: `Bearer ${authToken}` } },
+        { logLabel: "GET /conversations/suggested-questions" }
+      );
+    (async () => {
+      try {
+        let res = await doFetch(token);
+        if (!cancelled && res.status === 401) {
+          const newToken = await refreshAccessToken();
+          if (newToken && !cancelled) res = await doFetch(newToken);
+        }
         if (cancelled || !res.ok) return;
         const data = (await res.json()) as {
           suggestions?: string[];
@@ -251,20 +258,19 @@ export function DataPilotClient() {
         if (cancelled) return;
         setSuggestedSource(src || null);
         setSuggestedQuestions(next);
-      })
-      .catch(() => {
+      } catch {
         if (!cancelled) {
           setSuggestedQuestions([]);
           setSuggestedSource(null);
         }
-      })
-      .finally(() => {
+      } finally {
         if (!cancelled) setSuggestedLoading(false);
-      });
+      }
+    })();
     return () => {
       cancelled = true;
     };
-  }, [user, getAccessToken, selectedDataSourceId]);
+  }, [user, getAccessToken, refreshAccessToken, selectedDataSourceId]);
 
   /** User text for the turn that owns this assistant bubble (for persistence on /ask/continue). */
   function precedingUserContent(convKey: string, assistantMessageId: string): string {
