@@ -36,16 +36,6 @@ interface StatusResponse {
   hint?: string;
 }
 
-interface DemoPostgresFields {
-  configured: boolean;
-  host: string;
-  port: string;
-  database: string;
-  schema: string;
-  user: string;
-  password_display: string;
-}
-
 type CatalogEntry = {
   id: string;
   name: string;
@@ -193,9 +183,9 @@ export default function SourcesPage() {
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [showAddForm, setShowAddForm] = useState(false);
   const [modal, setModal] = useState<"postgres" | "bigquery" | "csv" | null>(null);
-  const [demoFields, setDemoFields] = useState<DemoPostgresFields | null>(null);
-  const [demoPostgresLoading, setDemoPostgresLoading] = useState(false);
-  const [demoPostgresLoadError, setDemoPostgresLoadError] = useState<string | null>(null);
+  const [pgUri, setPgUri] = useState("");
+  const [pgSchema, setPgSchema] = useState("public");
+  const [pgLabel, setPgLabel] = useState("My PostgreSQL");
   const [connectBusy, setConnectBusy] = useState(false);
   const [connectMsg, setConnectMsg] = useState<string | null>(null);
   const [bqLabel, setBqLabel] = useState("My BigQuery");
@@ -231,47 +221,13 @@ export default function SourcesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- refresh on user session
   }, [user?.id]);
 
-  const openPostgresModal = async () => {
+  const openPostgresModal = () => {
     setModal("postgres");
     setConnectMsg(null);
-    setDemoPostgresLoadError(null);
-    setDemoFields(null);
-    setDemoPostgresLoading(true);
-    try {
-      const res = await fetchWithRetry(
-        `${API_BASE}/data-sources/demo-postgres-fields`,
-        undefined,
-        { logLabel: "GET /data-sources/demo-postgres-fields" }
-      );
-      if (res.ok) {
-        setDemoFields((await res.json()) as DemoPostgresFields);
-      } else {
-        setDemoFields(null);
-        const raw = await res.text();
-        let detail = raw;
-        try {
-          const j = JSON.parse(raw) as { detail?: unknown };
-          if (typeof j.detail === "string") detail = j.detail;
-        } catch {
-          /* keep raw */
-        }
-        setDemoPostgresLoadError(
-          `Could not load demo Postgres fields (HTTP ${res.status}). ${detail.slice(0, 240)}`
-        );
-      }
-    } catch (e) {
-      setDemoFields(null);
-      setDemoPostgresLoadError(
-        e instanceof Error ? e.message : "Network error — is the API running and CORS allowed for this origin?"
-      );
-    } finally {
-      setDemoPostgresLoading(false);
-    }
   };
 
   const closePostgresModal = () => {
     setModal(null);
-    setDemoPostgresLoadError(null);
   };
 
   const authHeaders = (): Record<string, string> => {
@@ -280,31 +236,64 @@ export default function SourcesPage() {
     return { Authorization: `Bearer ${token}` };
   };
 
-  const connectDemoPostgres = async () => {
+  const connectPostgres = async () => {
     if (!user) {
       setConnectMsg("Sign in to save this connection.");
       return;
     }
+    if (!pgUri.trim()) {
+      setConnectMsg("Paste a connection URI.");
+      return;
+    }
     setConnectBusy(true);
     setConnectMsg(null);
-    try {
-      const res = await fetchWithRetry(
-        `${API_BASE}/data-sources/connect/demo-postgres`,
+
+    let token = getAccessToken();
+    if (!token) {
+      token = await refreshAccessToken();
+    }
+    if (!token) {
+      setConnectMsg("Session expired — sign out and sign back in.");
+      setConnectBusy(false);
+      return;
+    }
+
+    const doPost = (accessToken: string) =>
+      fetchWithRetry(
+        `${API_BASE}/data-sources/connect/postgres`,
         {
           method: "POST",
-          headers: { "Content-Type": "application/json", ...authHeaders() },
-          body: "{}",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
+          body: JSON.stringify({
+            connection_url: pgUri.trim(),
+            schema: pgSchema.trim() || "public",
+            label: pgLabel.trim() || "PostgreSQL",
+          }),
         },
-        { logLabel: "POST /data-sources/connect/demo-postgres" }
+        { logLabel: "POST /data-sources/connect/postgres" }
       );
+
+    try {
+      let res = await doPost(token);
+      if (res.status === 401) {
+        const t2 = await refreshAccessToken();
+        if (t2) res = await doPost(t2);
+      }
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setConnectMsg(typeof data.detail === "string" ? data.detail : "Connect failed");
+        setConnectMsg(
+          res.status === 401
+            ? "Session expired and could not be renewed. Please sign out and sign in again."
+            : typeof data.detail === "string"
+              ? data.detail
+              : "Connect failed"
+        );
         return;
       }
       setConnectMsg("Connected and schema saved.");
       setSelectedDataSourceId(String(data.id));
       setModal(null);
+      setPgUri("");
       await loadStatus();
     } catch (e) {
       setConnectMsg(e instanceof Error ? e.message : "Connect failed");
@@ -661,53 +650,36 @@ export default function SourcesPage() {
       )}
 
       {modal === "postgres" && (
-        <DataSourceModalChrome title="PostgreSQL (demo)" onClose={closePostgresModal}>
+        <DataSourceModalChrome title="PostgreSQL" onClose={closePostgresModal}>
           <p className="text-muted-foreground">
-            Demo mode: fields are shown read-only. In production, analysts would edit host, database, and
-            credentials and save multiple connections.
+            Paste a connection URI (e.g. from Neon, Supabase, or any PostgreSQL host). Stored encrypted
+            server-side.
           </p>
-          {demoPostgresLoading && (
-            <div className="flex items-center gap-2 text-[13px] text-muted-foreground">
-              <Loader2 className="size-4 animate-spin" aria-hidden />
-              Loading values from the API…
-            </div>
-          )}
-          {demoPostgresLoadError && (
-            <Alert variant="destructive">
-              <AlertDescription>{demoPostgresLoadError}</AlertDescription>
-            </Alert>
-          )}
-          {!demoPostgresLoading && !demoPostgresLoadError && !demoFields?.configured && (
-            <Alert>
-              <AlertDescription>
-                Set <code className="text-[11px]">DEMO_POSTGRES_*</code> in the project root{" "}
-                <code className="text-[11px]">.env</code> or <code className="text-[11px]">backend/.env</code>, then
-                restart the API. Use <code className="text-[11px]">DEMO_POSTGRES_DB</code> (or{" "}
-                <code className="text-[11px]">DEMO_POSTGRES_DATABASE</code>) for the database name.
-              </AlertDescription>
-            </Alert>
-          )}
-          <div className="grid gap-2">
-            {[
-              ["Host", demoFields?.host ?? ""],
-              ["Port", demoFields?.port ?? "5432"],
-              ["Database", demoFields?.database ?? ""],
-              ["Schema", demoFields?.schema ?? "public"],
-              ["User", demoFields?.user ?? ""],
-              ["Password", demoFields?.password_display ?? ""],
-            ].map(([k, v]) => (
-              <div key={k} className="space-y-1">
-                <label className="font-medium text-foreground">{k}</label>
-                <Input readOnly value={v} className="cursor-default bg-muted/40 text-foreground" />
-              </div>
-            ))}
+          <div className="space-y-2">
+            <label className="font-medium">Label</label>
+            <Input value={pgLabel} onChange={(e) => setPgLabel(e.target.value)} placeholder="My PostgreSQL" />
+            <label className="font-medium">Connection URI</label>
+            <textarea
+              className="min-h-[72px] w-full rounded-md border border-input/90 bg-background px-3 py-2 text-[12px] font-mono shadow-2xs outline-none transition-[border-color,box-shadow] focus:border-ring focus:ring-2 focus:ring-ring/35"
+              value={pgUri}
+              onChange={(e) => setPgUri(e.target.value)}
+              placeholder="postgresql://user:pass@host:5432/dbname?sslmode=require"
+              spellCheck={false}
+            />
+            <label className="font-medium">Schema</label>
+            <Input value={pgSchema} onChange={(e) => setPgSchema(e.target.value)} placeholder="public" />
           </div>
-          {connectMsg && <p className="text-sm text-muted-foreground">{connectMsg}</p>}
+          <p className="text-[12px] text-muted-foreground">
+            If your password contains <code className="text-[11px]">@</code> or <code className="text-[11px]">:</code>,
+            URL-encode them as <code className="text-[11px]">%40</code> /{" "}
+            <code className="text-[11px]">%3A</code> in the URI.
+          </p>
+          {connectMsg && <p className="text-sm text-destructive">{connectMsg}</p>}
           <div className="flex gap-2">
             <Button type="button" variant="outline" onClick={closePostgresModal}>
               Cancel
             </Button>
-            <Button type="button" onClick={connectDemoPostgres} disabled={connectBusy || !demoFields?.configured}>
+            <Button type="button" onClick={connectPostgres} disabled={connectBusy || !user || !pgUri.trim()}>
               {connectBusy ? <Loader2 className="size-4 animate-spin" /> : "Connect"}
             </Button>
           </div>

@@ -69,26 +69,69 @@ def connect_demo_postgres(user=Depends(require_user)):
     try:
         from core.credentials_crypto import encrypt_config
         from data_sources.introspect import introspect_postgres, schema_fingerprint
-        from data_sources.service import insert_source
+        from data_sources.service import find_source_by_type, insert_source, update_source
 
         catalog = introspect_postgres(schema, connect_kwargs=connect_kwargs, include_samples=True)
         fp = schema_fingerprint(catalog)
         enc = encrypt_config({**connect_kwargs, "schema": schema})
-        row = insert_source(
-            user["id"],
-            label,
-            "postgres",
-            enc,
-            catalog,
-            fp,
-            healthy=True,
-            last_error=None,
-        )
+        existing = find_source_by_type(user["id"], "postgres")
+        if existing:
+            row = update_source(
+                user["id"], existing["id"],
+                label=label, encrypted_config=enc,
+                schema_snapshot=catalog, schema_fingerprint=fp,
+                healthy=True, last_error=None,
+            )
+        else:
+            row = insert_source(user["id"], label, "postgres", enc, catalog, fp, healthy=True, last_error=None)
         return {"id": str(row["id"]), "label": row["label"], "source_type": "postgres", "healthy": True}
     except ValueError as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
     except Exception as e:
         logger.exception("connect_demo_postgres persist failed")
+        raise HTTPException(status_code=503, detail=str(e)) from e
+
+
+@router.post("/connect/postgres")
+def connect_postgres(body: dict = Body(default_factory=dict), user=Depends(require_user)):
+    connection_url = (body or {}).get("connection_url", "").strip()
+    schema = ((body or {}).get("schema") or "public").strip() or "public"
+    label = ((body or {}).get("label") or "PostgreSQL").strip() or "PostgreSQL"
+    if not connection_url:
+        raise HTTPException(status_code=400, detail="connection_url is required")
+    try:
+        import psycopg2
+
+        from core.postgres_dsn import sanitize_postgres_uri_for_psycopg2
+
+        safe_url = sanitize_postgres_uri_for_psycopg2(connection_url)
+        c = psycopg2.connect(safe_url)
+        c.close()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Connection failed: {e}") from e
+    try:
+        from core.credentials_crypto import encrypt_config
+        from data_sources.introspect import introspect_postgres, schema_fingerprint
+        from data_sources.service import find_source_by_type, insert_source, update_source
+
+        catalog = introspect_postgres(schema, connection_url=connection_url, include_samples=True)
+        fp = schema_fingerprint(catalog)
+        enc = encrypt_config({"connection_url": connection_url, "schema": schema})
+        existing = find_source_by_type(user["id"], "postgres")
+        if existing:
+            row = update_source(
+                user["id"], existing["id"],
+                label=label, encrypted_config=enc,
+                schema_snapshot=catalog, schema_fingerprint=fp,
+                healthy=True, last_error=None,
+            )
+        else:
+            row = insert_source(user["id"], label, "postgres", enc, catalog, fp, healthy=True, last_error=None)
+        return {"id": str(row["id"]), "label": row["label"], "source_type": "postgres", "healthy": True}
+    except ValueError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    except Exception as e:
+        logger.exception("connect_postgres persist failed")
         raise HTTPException(status_code=503, detail=str(e)) from e
 
 

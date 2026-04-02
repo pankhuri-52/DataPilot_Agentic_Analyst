@@ -88,6 +88,55 @@ def insert_source(
     return retry_sync("user_data_sources.insert", _run)
 
 
+def find_source_by_type(user_id: str, source_type: str) -> dict[str, Any] | None:
+    """Return the first source matching user + source_type, or None."""
+    def _run():
+        c = _service()
+        r = (
+            c.table("user_data_sources")
+            .select("*")
+            .eq("user_id", user_id)
+            .eq("source_type", source_type)
+            .limit(1)
+            .execute()
+        )
+        rows = r.data or []
+        return dict(rows[0]) if rows else None
+
+    return retry_sync("user_data_sources.find_by_type", _run)
+
+
+def update_source(
+    user_id: str,
+    source_id: str,
+    *,
+    label: str,
+    encrypted_config: str,
+    schema_snapshot: dict,
+    schema_fingerprint: str,
+    healthy: bool = True,
+    last_error: str | None = None,
+) -> dict[str, Any]:
+    def _run():
+        c = _service()
+        patch = {
+            "label": label,
+            "encrypted_config": encrypted_config,
+            "schema_snapshot": schema_snapshot,
+            "schema_fingerprint": schema_fingerprint,
+            "healthy": healthy,
+            "last_error": last_error,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        c.table("user_data_sources").update(patch).eq("user_id", user_id).eq("id", source_id).execute()
+        fetched = get_source(user_id, source_id)
+        if fetched:
+            return fetched
+        raise ValueError("update user_data_sources returned no row")
+
+    return retry_sync("user_data_sources.update", _run)
+
+
 def update_source_health(
     user_id: str,
     source_id: str,
