@@ -11,9 +11,10 @@ import re
 from datetime import datetime, timezone
 from langgraph.types import interrupt
 
-from llm import get_gemini, invoke_with_retry
+from llm import coerce_ai_text, get_llm, invoke_with_retry
 from langfuse_setup import get_prompt
-from langfuse import observe, get_client as _get_langfuse_client
+from langfuse import observe
+from langfuse_setup import safe_update_current_span
 from agents.state import TraceEntry
 from agents.context import get_effective_connector, get_effective_schema
 from agents.schema_utils import plan_result_limit_display, sql_row_limit_rule_5
@@ -107,11 +108,11 @@ Rules:
 
 @observe(name="bq-dry-run-estimate", as_type="span")
 def _bq_dry_run(connector, sql: str):
-    _get_langfuse_client().update_current_span(
+    safe_update_current_span(
         input={"sql": sql, "dialect": "bigquery"},
     )
     bytes_scanned, estimated_cost = connector.dry_run_estimate(sql)
-    _get_langfuse_client().update_current_span(
+    safe_update_current_span(
         output={"bytes_scanned": bytes_scanned, "estimated_cost_usd": estimated_cost},
     )
     return bytes_scanned, estimated_cost
@@ -189,7 +190,7 @@ Invalid SQL:
 
 Return corrected SQL only. Keep semantics intact and stay SELECT-only."""
     response = invoke_with_retry(llm, correction_prompt)
-    return clean_sql_text(response.content if hasattr(response, "content") else str(response))
+    return clean_sql_text(coerce_ai_text(response))
 
 
 def run_optimizer_prepare(state: dict) -> dict:
@@ -239,7 +240,7 @@ def run_optimizer_prepare(state: dict) -> dict:
     rlr = sql_row_limit_rule_5(effective_plan)
 
     try:
-        llm = get_gemini()
+        llm = get_llm()
         dialect = connector.dialect
         hints = state.get("runtime_connection_hints") or {}
         if dialect == "postgres":
@@ -307,7 +308,7 @@ def run_optimizer_prepare(state: dict) -> dict:
                 f"{execution_error}\n"
             )
         response = invoke_with_retry(llm, prompt)
-        sql = clean_sql_text(response.content if hasattr(response, "content") else str(response))
+        sql = clean_sql_text(coerce_ai_text(response))
 
         if FORBIDDEN_SQL_PATTERNS.search(sql):
             append_trace(
@@ -500,12 +501,8 @@ def run_optimizer_gate(state: dict) -> dict:
             "optimizer_regenerate_hint": None,
         }
 
-    # Auto-approve when the optimizer is rewriting SQL after an execution failure.
-    # We already asked the user once; interrupting them again for every correction attempt
-    # is poor UX.  The cost ceiling above still applies even in auto-approve mode.
-    execution_retry = bool((state.get("execution_error") or "").strip())
     skip_hil = os.getenv("DATAPILOT_SKIP_INTERRUPTS", "").strip().lower() in ("1", "true", "yes")
-    if skip_hil or execution_retry:
+    if skip_hil:
         approved = True
     else:
         cost_summary = None
@@ -584,6 +581,9 @@ def run_optimizer_gate(state: dict) -> dict:
         **_clear_pending_execute(),
         "optimizer_decline_count": 0,
         "optimizer_regenerate_hint": None,
+        # Any previous execution failure has now been addressed by a newly approved SQL candidate.
+        # Clearing it here prevents the orchestrator from treating the retry as still failed.
+        "execution_error": None,
     }
     if bytes_scanned is not None:
         update["bytes_scanned"] = bytes_scanned

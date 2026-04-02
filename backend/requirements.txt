@@ -7,10 +7,11 @@ python-dotenv>=1.0.0
 # BigQuery (POC data & later agent queries)
 google-cloud-bigquery>=3.14.0
 
-# Gemini LLM
+# OpenAI LLM
 langchain-core>=0.3.0 # engine for our lanchain
 langchain>=0.3.0 # required by langfuse LangChain CallbackHandler
-langchain-google-genai>=2.0.0 # Allows langchain to talk to Gemini
+langchain-openai>=0.2.0 # Allows langchain to talk to OpenAI
+openai>=1.0.0
 
 # LLM observability + prompt management (Langfuse Cloud)
 langfuse>=3.0.0

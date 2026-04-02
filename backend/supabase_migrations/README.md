@@ -15,6 +15,20 @@ In the Supabase SQL Editor, run the migrations in order:
 2. `migrations/001_conversations.sql` – creates `conversations` and `messages` tables, indexes, RLS.
 3. `migrations/002_chat_schema_docs.sql` – adds schema comments (optional).
 4. `migrations/003_query_kb.sql` – RPCs `match_query_kb` and `insert_query_kb_entry`. **Run after** `000` (table must exist).
+5. `migrations/008_query_kb_embedding_1536.sql` – optional non-destructive prep for 1536-d migration (adds `embedding_v2` shadow column).
+
+To refresh existing KB rows with new OpenAI embeddings without deleting data, run:
+
+```bash
+py -3.12 backend/scripts/reembed_query_kb_openai.py
+```
+
+This updates embeddings in place in `query_kb_entries.embedding` (768-d by default).  
+If you are piloting 1536-d migration, re-embed into shadow column:
+
+```bash
+py -3.12 backend/scripts/reembed_query_kb_openai.py --target-column embedding_v2
+```
 
 **If the backend logs PostgREST `PGRST202`** (“Could not find the function `public.match_query_kb` … in the schema cache”): the RPCs are missing or PostgREST has not reloaded. Re-run `003_query_kb.sql`, then in **Project Settings → API** choose **Reload schema** (or wait a minute). Until this works, the app never matches the knowledge base and always runs the full agent pipeline.
 

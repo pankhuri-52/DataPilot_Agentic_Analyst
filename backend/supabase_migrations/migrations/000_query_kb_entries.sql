@@ -1,5 +1,5 @@
 -- Query KB storage table. Run BEFORE 003_query_kb.sql (RPCs read/write this table).
--- vector(768) must match GEMINI_EMBEDDING_DIMENSION in backend .env (default 768).
+-- vector(768) must match OPENAI_EMBEDDING_DIMENSION in backend .env (default 768).
 
 CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA extensions;
 

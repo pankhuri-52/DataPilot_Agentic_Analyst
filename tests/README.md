@@ -52,18 +52,18 @@ Tests regex-based injection detection and schema-introspection detection.
 python tests/evals/run_evals.py
 ```
 
-### Full eval including LLM scope classification (needs GOOGLE_API_KEY)
+### Full eval including LLM scope classification (needs OPENAI_API_KEY)
 
-Calls the real Gemini planner and checks `query_scope` against expected values.
+Calls the real OpenAI-backed planner and checks `query_scope` against expected values.
 
 ```bash
-GOOGLE_API_KEY=your_key python tests/evals/run_evals.py --llm
+OPENAI_API_KEY=your_key python tests/evals/run_evals.py --llm
 ```
 
 On Windows:
 
 ```powershell
-$env:GOOGLE_API_KEY="your_key"
+$env:OPENAI_API_KEY="your_key"
 python tests/evals/run_evals.py --llm
 ```
 

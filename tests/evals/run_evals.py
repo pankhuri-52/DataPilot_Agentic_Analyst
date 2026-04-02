@@ -7,19 +7,19 @@ Runs accuracy checks against golden_queries.json in two layers:
   Layer 1 – Guard evals (regex, no API key, instant):
     Checks injection detection and schema-introspection detection.
 
-  Layer 2 – LLM scope evals (requires GOOGLE_API_KEY):
-    Calls the real Gemini planner and checks query_scope / is_valid.
+  Layer 2 – LLM scope evals (requires OPENAI_API_KEY):
+    Calls the real OpenAI-backed planner and checks query_scope / is_valid.
 
 Usage
 -----
   # Layer 1 only (always works):
   python tests/evals/run_evals.py
 
-  # Both layers (needs GOOGLE_API_KEY in environment):
+  # Both layers (needs OPENAI_API_KEY in environment):
   python tests/evals/run_evals.py --llm
 
   # Windows PowerShell:
-  $env:GOOGLE_API_KEY="your_key"; python tests/evals/run_evals.py --llm
+  $env:OPENAI_API_KEY="your_key"; python tests/evals/run_evals.py --llm
 """
 from __future__ import annotations
 
@@ -119,18 +119,18 @@ def _run_guard_evals(cases: list[dict]) -> tuple[int, int]:
 # ---------------------------------------------------------------------------
 
 def _run_llm_evals(cases: list[dict]) -> tuple[int, int]:
-    """Returns (passed, total) for LLM scope cases. Requires GOOGLE_API_KEY."""
+    """Returns (passed, total) for LLM scope cases. Requires OPENAI_API_KEY."""
     llm_cases = [c for c in cases if "expected_scope" in c and not c.get("_comment")]
     if not llm_cases:
         return 0, 0
 
-    if not os.environ.get("GOOGLE_API_KEY"):
-        print(f"\n{YELLOW}Skipping LLM evals – GOOGLE_API_KEY not set.{RESET}")
-        print(f"  Run with --llm and set GOOGLE_API_KEY to enable LLM scope checks.\n")
+    if not os.environ.get("OPENAI_API_KEY"):
+        print(f"\n{YELLOW}Skipping LLM evals – OPENAI_API_KEY not set.{RESET}")
+        print(f"  Run with --llm and set OPENAI_API_KEY to enable LLM scope checks.\n")
         return 0, 0
 
     print(f"\n{BOLD}{CYAN}── LLM Scope Evals ({len(llm_cases)} cases) ──{RESET}")
-    print(f"  Using Gemini planner (this may take 30–90 seconds)\n")
+    print(f"  Using OpenAI-backed planner (this may take 30–90 seconds)\n")
     print(f"{'ID':<14} {'Expected scope':<22} {'Got scope':<22} {'is_valid':<10} Note")
     print("─" * 90)
 
@@ -235,7 +235,7 @@ def main() -> int:
     parser.add_argument(
         "--llm",
         action="store_true",
-        help="Also run LLM scope classification evals (requires GOOGLE_API_KEY)",
+        help="Also run LLM scope classification evals (requires OPENAI_API_KEY)",
     )
     args = parser.parse_args()
 

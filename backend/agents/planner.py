@@ -5,9 +5,9 @@ stops and asks if they want to proceed with the available range instead.
 """
 import json
 import re
-from llm import get_gemini, invoke_with_retry
+from llm import get_llm, invoke_structured_with_retry
 from langfuse_setup import get_prompt
-from langfuse import get_client as _get_langfuse_client
+from langfuse_setup import safe_update_current_span
 from agents.state import AnalysisPlan, TraceEntry
 from agents.trace_stream import append_trace
 from agents.context import get_effective_schema
@@ -462,8 +462,7 @@ def run_planner(state: dict) -> dict:
                 "Leave resolved_source_id empty. Plan using WAREHOUSE / SOURCES CONTEXT and DATA AVAILABILITY only.\n\n"
             )
 
-        llm = get_gemini()
-        structured_llm = llm.with_structured_output(AnalysisPlan, method="json_mode")
+        llm = get_llm()
         prompt = get_prompt("datapilot-planner", PLANNER_PROMPT).format(
             query=query,
             CONVERSATION_HISTORY_SECTION=history_section or "",
@@ -480,25 +479,22 @@ def run_planner(state: dict) -> dict:
                 message="Drafting analysis plan with the model…",
             ).model_dump(),
         )
-        plan = invoke_with_retry(structured_llm, prompt)
+        plan = invoke_structured_with_retry(llm, AnalysisPlan, prompt)
 
         plan_dict = plan.model_dump() if hasattr(plan, "model_dump") else plan
         scope = (plan_dict.get("query_scope") or "").strip().lower()
-        try:
-            _get_langfuse_client().update_current_span(
-                input={"query": query},
-                output={
-                    "is_valid": plan_dict.get("is_valid"),
-                    "query_scope": scope,
-                    "metrics": plan_dict.get("metrics", []),
-                    "dimensions": plan_dict.get("dimensions", []),
-                    "filters": plan_dict.get("filters", {}),
-                    "clarifying_questions": plan_dict.get("clarifying_questions", []),
-                },
-                metadata={"agent": "planner"},
-            )
-        except Exception:
-            pass
+        safe_update_current_span(
+            input={"query": query},
+            output={
+                "is_valid": plan_dict.get("is_valid"),
+                "query_scope": scope,
+                "metrics": plan_dict.get("metrics", []),
+                "dimensions": plan_dict.get("dimensions", []),
+                "filters": plan_dict.get("filters", {}),
+                "clarifying_questions": plan_dict.get("clarifying_questions", []),
+            },
+            metadata={"agent": "planner"},
+        )
         if not plan_dict.get("is_valid") and scope == "out_of_scope":
             plan_dict["clarifying_questions"] = [OUT_OF_SCOPE_MESSAGE]
         elif not plan_dict.get("is_valid") and scope not in ("out_of_scope", "needs_clarification", "data_question"):

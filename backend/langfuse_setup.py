@@ -71,6 +71,52 @@ def merge_langfuse_into_graph_config(
     return out
 
 
+def has_active_langfuse_observation() -> bool:
+    """True when a Langfuse observation/span is active in current context."""
+    if not langfuse_configured():
+        return False
+    try:
+        from langfuse import get_client
+
+        return bool(get_client().get_current_observation_id())
+    except Exception:
+        return False
+
+
+def safe_update_current_span(**kwargs: Any) -> bool:
+    """
+    Update the current span only when a span is active.
+    Returns True when update call executed successfully.
+    """
+    if not has_active_langfuse_observation():
+        return False
+    try:
+        from langfuse import get_client
+
+        get_client().update_current_span(**kwargs)
+        return True
+    except Exception:
+        logger.debug("Langfuse update_current_span skipped.", exc_info=True)
+        return False
+
+
+def safe_update_current_generation(**kwargs: Any) -> bool:
+    """
+    Update the current generation only when a span is active.
+    Returns True when update call executed successfully.
+    """
+    if not has_active_langfuse_observation():
+        return False
+    try:
+        from langfuse import get_client
+
+        get_client().update_current_generation(**kwargs)
+        return True
+    except Exception:
+        logger.debug("Langfuse update_current_generation skipped.", exc_info=True)
+        return False
+
+
 def get_prompt(name: str, fallback: str) -> str:
     """
     Fetch production-labeled text prompt from Langfuse; normalize to Python str.format placeholders.

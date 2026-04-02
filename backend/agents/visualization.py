@@ -2,9 +2,9 @@
 Visualization & Explanation Agent – chart spec and natural language summary.
 """
 from pydantic import BaseModel, Field
-from llm import get_gemini, invoke_with_retry
+from llm import get_llm, invoke_structured_with_retry
 from langfuse_setup import get_prompt
-from langfuse import get_client as _get_langfuse_client
+from langfuse_setup import safe_update_current_span
 from agents.state import TraceEntry
 from agents.trace_stream import append_trace
 
@@ -165,8 +165,7 @@ def run_visualization(state: dict) -> dict:
                 "use return_date and lowercase reason_code (defective, changed_mind, not_as_described, duplicate_order)."
             )
         try:
-            llm = get_gemini()
-            structured_llm = llm.with_structured_output(VisualizationOutput, method="json_mode")
+            llm = get_llm()
             prompt = get_prompt("datapilot-viz-empty", VIZ_PROMPT_EMPTY).format(
                 query=query,
                 metrics=plan.get("metrics", []),
@@ -176,7 +175,7 @@ def run_visualization(state: dict) -> dict:
                 min_date=data_range.get("min", "?") if data_range else "?",
                 max_date=data_range.get("max", "?") if data_range else "?",
             )
-            result = invoke_with_retry(structured_llm, prompt)
+            result = invoke_structured_with_retry(llm, VisualizationOutput, prompt)
             result_dict = result.model_dump() if hasattr(result, "model_dump") else result
             explanation = result_dict.get(
                 "explanation", empty_result_reason or "No data was returned for this query."
@@ -196,6 +195,7 @@ def run_visualization(state: dict) -> dict:
             "explanation": explanation,
             "answer_summary": answer_summary,
             "follow_up_suggestions": follow_up,
+            "raw_results": effective_results,
             "trace": trace,
             "data_range": data_range,
             "empty_result_reason": empty_result_reason,
@@ -213,8 +213,7 @@ def run_visualization(state: dict) -> dict:
     results_sample = str(effective_results[:20])
 
     try:
-        llm = get_gemini()
-        structured_llm = llm.with_structured_output(VisualizationOutput, method="json_mode")
+        llm = get_llm()
         prompt = get_prompt("datapilot-viz", VIZ_PROMPT).format(
             query=query,
             metrics=metrics,
@@ -222,7 +221,7 @@ def run_visualization(state: dict) -> dict:
             results_sample=results_sample,
             columns=columns,
         )
-        result = invoke_with_retry(structured_llm, prompt)
+        result = invoke_structured_with_retry(llm, VisualizationOutput, prompt)
 
         result_dict = result.model_dump() if hasattr(result, "model_dump") else result
         chart_spec = {
@@ -267,19 +266,16 @@ def run_visualization(state: dict) -> dict:
         answer_summary = result_dict.get("answer_summary") or explanation
         raw_fu = result_dict.get("follow_up_suggestions") or []
         follow_up = [str(x) for x in raw_fu if x][:5]
-        try:
-            _get_langfuse_client().update_current_span(
-                input={"query": query, "row_count": len(effective_results)},
-                output={
-                    "chart_type": chart_spec.get("chart_type"),
-                    "chart_title": chart_spec.get("title"),
-                    "answer_summary": answer_summary,
-                    "follow_up_suggestions": follow_up,
-                },
-                metadata={"agent": "visualization"},
-            )
-        except Exception:
-            pass
+        safe_update_current_span(
+            input={"query": query, "row_count": len(effective_results)},
+            output={
+                "chart_type": chart_spec.get("chart_type"),
+                "chart_title": chart_spec.get("title"),
+                "answer_summary": answer_summary,
+                "follow_up_suggestions": follow_up,
+            },
+            metadata={"agent": "visualization"},
+        )
 
         append_trace(
             trace,
@@ -296,10 +292,9 @@ def run_visualization(state: dict) -> dict:
             "explanation": explanation,
             "answer_summary": answer_summary,
             "follow_up_suggestions": follow_up,
+            "raw_results": effective_results,
             "trace": trace,
         }
-        if used_kb_preview:
-            out["raw_results"] = effective_results
         return out
     except Exception as e:
         append_trace(

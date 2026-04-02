@@ -21,7 +21,7 @@ _MAX_DELAY = float(os.getenv("DATAPILOT_RETRY_MAX_DELAY_SEC", "30"))
 
 def _is_quota_or_usage_exhausted(exc: BaseException) -> bool:
     """
-    Gemini / Google APIs return RESOURCE_EXHAUSTED or explicit quota messages for
+    LLM providers return RESOURCE_EXHAUSTED or explicit quota messages for
     daily limits and similar. Retrying these in a loop wastes time and confuses users.
     """
     msg = f"{exc!s}\n{type(exc).__name__}\n{exc!r}".lower()

@@ -20,7 +20,7 @@ def _kb_enabled() -> bool:
 
 def _min_similarity() -> float:
     try:
-        # 0.85 was too strict with real Gemini variance + legacy KB rows; 0.78 is a safer default.
+        # 0.85 was too strict with real embedding variance + legacy KB rows; 0.78 is a safer default.
         return float(os.getenv("QUERY_KB_MIN_SIMILARITY", "0.78"))
     except ValueError:
         return 0.78

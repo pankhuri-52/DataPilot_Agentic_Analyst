@@ -99,7 +99,7 @@ class TestCheckRelevance:
         state = self._make_state()
         rows = [{"count": 42}]
         mock_llm, mock_invoke = self._mock_llm("YES\nResults show row count directly.")
-        with patch("agents.validator.get_gemini", return_value=mock_llm), \
+        with patch("agents.validator.get_llm", return_value=mock_llm), \
              patch("agents.validator.invoke_with_retry", mock_invoke):
             ok, hint = _check_relevance(state, rows, [])
         assert ok is True
@@ -111,7 +111,7 @@ class TestCheckRelevance:
         mock_llm, mock_invoke = self._mock_llm(
             "NO\nResults show product stock, not order count."
         )
-        with patch("agents.validator.get_gemini", return_value=mock_llm), \
+        with patch("agents.validator.get_llm", return_value=mock_llm), \
              patch("agents.validator.invoke_with_retry", mock_invoke):
             ok, hint = _check_relevance(state, rows, [])
         assert ok is False
@@ -122,7 +122,7 @@ class TestCheckRelevance:
         """If LLM throws, relevance check should fail open (return True) so pipeline continues."""
         state = self._make_state()
         rows = [{"count": 5}]
-        with patch("agents.validator.get_gemini", side_effect=Exception("API timeout")):
+        with patch("agents.validator.get_llm", side_effect=Exception("API timeout")):
             ok, hint = _check_relevance(state, rows, [])
         assert ok is True  # fail open
         assert hint is None
@@ -148,7 +148,7 @@ class TestRunValidatorWithLLM:
         state = self._state_with_llm(rows)
         mock_response = MagicMock()
         mock_response.content = "YES\nCount answers the question directly."
-        with patch("agents.validator.get_gemini", return_value=MagicMock()), \
+        with patch("agents.validator.get_llm", return_value=MagicMock()), \
              patch("agents.validator.invoke_with_retry", return_value=mock_response):
             out = run_validator(state)
         assert out["validation_ok"] is True
@@ -158,7 +158,7 @@ class TestRunValidatorWithLLM:
         state = self._state_with_llm(rows)
         mock_response = MagicMock()
         mock_response.content = "NO\nReturned products, not order count."
-        with patch("agents.validator.get_gemini", return_value=MagicMock()), \
+        with patch("agents.validator.get_llm", return_value=MagicMock()), \
              patch("agents.validator.invoke_with_retry", return_value=mock_response):
             out = run_validator(state)
         assert out["validation_ok"] is False

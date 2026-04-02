@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 
 from agents.state import DataPilotState, TraceEntry
 from agents.trace_stream import append_trace
-from llm import get_gemini, invoke_with_retry
+from llm import get_llm, invoke_structured_with_retry
 from langfuse_setup import get_prompt
 from langfuse import get_client as _get_langfuse_client
 
@@ -110,6 +110,37 @@ Output your decision as JSON with "next" (agent name or "END") and "reasoning" (
 """
 
 
+def _deterministic_next_agent(state: DataPilotState) -> tuple[str, str] | None:
+    """Hard safety routes for states that must not be left to model discretion."""
+    has_pending_sql = bool(state.get("pending_execute_sql"))
+    has_approved_sql = bool(state.get("sql"))
+    has_results = state.get("raw_results") is not None
+    has_regenerate_hint = bool((state.get("optimizer_regenerate_hint") or "").strip())
+
+    # If SQL is prepared but not yet approved/executed, gate must run next.
+    if has_pending_sql and not has_approved_sql:
+        return (
+            "optimizer_gate",
+            "Pending SQL exists and requires explicit user approval before execution.",
+        )
+
+    # If user declined SQL and asked to regenerate, optimizer must rebuild SQL.
+    if has_regenerate_hint:
+        return (
+            "optimizer_prepare",
+            "Regeneration hint is set after decline, so optimizer must produce revised SQL.",
+        )
+
+    # If SQL is approved but no results are present, execution is the only valid next step.
+    if has_approved_sql and not has_results:
+        return (
+            "executor",
+            "SQL is approved and awaiting execution to produce results.",
+        )
+
+    return None
+
+
 def run_orchestrator(state: DataPilotState) -> dict:
     """Orchestrator Agent: LLM-powered dynamic routing between pipeline agents."""
     trace = list(state.get("trace") or [])
@@ -164,16 +195,20 @@ def run_orchestrator(state: DataPilotState) -> dict:
         validator_retry_count=validator_retry_count,
     )
 
-    if orchestrator_hops >= max_hops:
+    forced_decision = _deterministic_next_agent(state)
+    if forced_decision is not None:
+        next_agent, reasoning = forced_decision
+    elif orchestrator_hops >= max_hops:
         next_agent = "END"
         reasoning = (
             f"Reached orchestration safety cap ({orchestrator_hops}/{max_hops}) to prevent loop-driven retries."
         )
     else:
-        llm = get_gemini()
-        structured_llm = llm.with_structured_output(OrchestratorDecision, method="json_mode")
+        llm = get_llm()
         try:
-            decision: OrchestratorDecision = invoke_with_retry(structured_llm, prompt)
+            decision: OrchestratorDecision = invoke_structured_with_retry(
+                llm, OrchestratorDecision, prompt
+            )
             next_agent = decision.next.strip()
             reasoning = decision.reasoning.strip()
         except Exception as exc:

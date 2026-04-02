@@ -17,7 +17,8 @@ from agents.query_kb_helpers import (
 from agents.context import get_effective_connector, get_effective_schema
 from agents.state import TraceEntry
 from agents.trace_stream import append_trace
-from langfuse import observe, get_client as _get_langfuse_client
+from langfuse import observe
+from langfuse_setup import safe_update_current_span
 
 logger = logging.getLogger("datapilot.query_kb")
 
@@ -27,12 +28,12 @@ def _kb_vector_search(match_text: str, dialect: str, fingerprint: str):
     from embeddings import embed_text
     from query_kb_store import match_similar_queries_with_relaxation
 
-    _get_langfuse_client().update_current_span(
+    safe_update_current_span(
         input={"query": match_text, "dialect": dialect},
     )
     q_vec = embed_text(match_text, task_type="RETRIEVAL_QUERY")
     rows, match_tag = match_similar_queries_with_relaxation(q_vec, dialect, fingerprint)
-    _get_langfuse_client().update_current_span(
+    safe_update_current_span(
         output={"rows_found": len(rows), "match_tag": match_tag},
     )
     return rows, match_tag

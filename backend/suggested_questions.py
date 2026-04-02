@@ -340,7 +340,7 @@ def build_suggested_questions(
     context = _merge_question_context(freq_rows, recent_rows)
     kb_questions: list[str] = []
 
-    if kb_flag and context and os.getenv("GOOGLE_API_KEY") and _llm_enabled():
+    if kb_flag and context and os.getenv("OPENAI_API_KEY") and _llm_enabled():
         try:
             from data_sources.runtime import resolve_connector_for_state
             from embeddings import embed_text
@@ -401,7 +401,7 @@ def build_suggested_questions(
         _cache_set(cache_key, out)
         return out
 
-    if not _llm_enabled() or not os.getenv("GOOGLE_API_KEY"):
+    if not _llm_enabled() or not os.getenv("OPENAI_API_KEY"):
         seeded = _schema_seed_questions(schema, lim)
         sug = _clamp_suggestions(seeded, lim)
         out = {
@@ -414,7 +414,7 @@ def build_suggested_questions(
         return out
 
     try:
-        from llm import get_gemini, invoke_with_retry
+        from llm import get_llm, invoke_structured_with_retry
 
         from agents.schema_utils import extract_data_ranges
         from agents.time_window_guard import suggested_question_outside_catalog_window
@@ -458,9 +458,8 @@ Rules:
 - Stay within the retail/B2B analytics domain implied by the tables.
 - Do not mention "knowledge base", "embedding", or internal systems."""
 
-        llm = get_gemini()
-        structured = llm.with_structured_output(SuggestedQuestionsOutput, method="json_mode")
-        result = invoke_with_retry(structured, prompt)
+        llm = get_llm()
+        result = invoke_structured_with_retry(llm, SuggestedQuestionsOutput, prompt)
         result_dict = result.model_dump() if hasattr(result, "model_dump") else result
         raw_list = result_dict.get("suggestions") or []
         sug = _extract_validated_questions(raw_list, allowlist, lim * 2)

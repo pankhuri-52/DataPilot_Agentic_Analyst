@@ -90,7 +90,7 @@
   },
 
   {
-    "_comment": "=== LLM LAYER: In-scope data questions (needs GOOGLE_API_KEY) ===",
+    "_comment": "=== LLM LAYER: In-scope data questions (needs OPENAI_API_KEY) ===",
     "id": "llm_01",
     "query": "What were total sales last quarter?",
     "expected_scope": "data_question",

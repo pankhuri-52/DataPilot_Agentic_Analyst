@@ -8,6 +8,10 @@ import sys
 
 def setup_logging() -> None:
     """Configure root logging once (idempotent). Respects LOG_LEVEL env (default INFO)."""
+    lf_level_name = (os.getenv("LANGFUSE_LOG_LEVEL") or "ERROR").upper()
+    lf_level = getattr(logging, lf_level_name, logging.ERROR)
+    logging.getLogger("langfuse").setLevel(lf_level)
+
     root = logging.getLogger()
     if root.handlers:
         return

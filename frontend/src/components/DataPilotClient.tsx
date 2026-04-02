@@ -348,7 +348,7 @@ export function DataPilotClient() {
     patchMessages(convKey, (prev) =>
       prev.map((m) =>
         m.id === assistantMessageId
-          ? { ...m, loading: true, pendingInterrupt: undefined }
+          ? { ...m, loading: true }
           : m
       )
     );
@@ -415,7 +415,7 @@ export function DataPilotClient() {
                 prev.map((m) => {
                   if (m.id !== assistantMessageId) return m;
                   const newTrace = [...(m.liveTrace ?? []), event.trace_entry];
-                  return { ...m, liveTrace: newTrace };
+                  return { ...m, liveTrace: newTrace, pendingInterrupt: undefined, loading: true };
                 })
               );
             } else if (event.type === "complete") {
@@ -434,6 +434,8 @@ export function DataPilotClient() {
                         liveTrace: event.response?.trace ?? m.liveTrace,
                         response: event.response,
                         plan: event.response?.plan ?? m.plan,
+                        pendingInterrupt: undefined,
+                        error: undefined,
                       }
                     : m
                 )
@@ -471,7 +473,9 @@ export function DataPilotClient() {
             } else if (event.type === "error") {
               patchMessages(convKey, (prev) =>
                 prev.map((m) =>
-                  m.id === assistantMessageId ? { ...m, loading: false, error: event.message ?? "Agent error" } : m
+                  m.id === assistantMessageId
+                    ? { ...m, loading: false, error: event.message ?? "Agent error" }
+                    : m
                 )
               );
             }
@@ -502,6 +506,8 @@ export function DataPilotClient() {
                         liveTrace: event.response?.trace ?? m.liveTrace,
                         response: event.response,
                         plan: event.response?.plan ?? m.plan,
+                        pendingInterrupt: undefined,
+                        error: undefined,
                       }
                     : m
                 )

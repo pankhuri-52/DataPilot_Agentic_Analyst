@@ -568,13 +568,13 @@ export function ExecutionPlanPanel({
     return isPhase(a) ? a : null;
   }, [liveTrace]);
 
-  const awaitingExecute =
-    pendingInterrupt?.reason === "execute_query" ||
-    pendingInterrupt?.data?.reason === "execute_query";
+  const interruptReason =
+    (pendingInterrupt?.reason as string | undefined) ??
+    (pendingInterrupt?.data?.reason as string | undefined) ??
+    "";
 
-  const awaitingQueryCache =
-    pendingInterrupt?.reason === "query_cache_hit" ||
-    pendingInterrupt?.data?.reason === "query_cache_hit";
+  const awaitingExecute = interruptReason === "execute_query";
+  const awaitingQueryCache = interruptReason === "query_cache_hit";
 
   /** Single "current" pipeline step while loading — first phase without terminal success/error. */
   const pipelineActivePhase: ExecutionPhase = useMemo(() => {

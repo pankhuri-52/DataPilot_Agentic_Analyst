@@ -5,9 +5,10 @@ Uses SQL from Optimizer when available; otherwise generates SQL (legacy path).
 import os
 import json
 import re
-from llm import get_gemini, invoke_with_retry
+from llm import coerce_ai_text, get_llm, invoke_with_retry
 from langfuse_setup import get_prompt
-from langfuse import observe, get_client as _get_langfuse_client
+from langfuse import observe
+from langfuse_setup import safe_update_current_span
 from agents.state import TraceEntry
 from agents.context import get_effective_connector, get_effective_schema
 from agents.schema_utils import plan_result_limit_display, sql_row_limit_rule_5
@@ -119,11 +120,11 @@ Rules:
 
 @observe(name="sql-execution", as_type="span")
 def _run_sql(connector, sql: str):
-    _get_langfuse_client().update_current_span(
+    safe_update_current_span(
         input={"sql": sql, "dialect": connector.dialect},
     )
     results = connector.execute(sql)
-    _get_langfuse_client().update_current_span(
+    safe_update_current_span(
         output={"row_count": len(results)},
     )
     return results
@@ -132,7 +133,7 @@ def _run_sql(connector, sql: str):
 @observe(name="date-range-diagnostic", as_type="span")
 def _run_date_diagnostic(connector, schema: dict):
     data_range, reason = connector.run_date_range_diagnostic(schema)
-    _get_langfuse_client().update_current_span(
+    safe_update_current_span(
         output={"data_range": data_range, "reason": reason},
     )
     return data_range, reason
@@ -213,7 +214,7 @@ def run_executor(state: dict) -> dict:
         rld = plan_result_limit_display(effective_plan)
         rlr = sql_row_limit_rule_5(effective_plan)
 
-        llm = get_gemini()
+        llm = get_llm()
         dialect = connector.dialect
         if dialect == "postgres":
             schema_name = hints.get("postgres_schema") or os.getenv("POSTGRES_SCHEMA", "public")
@@ -238,7 +239,7 @@ def run_executor(state: dict) -> dict:
                 dataset=dataset_id,
             )
         response = invoke_with_retry(llm, prompt)
-        sql = clean_sql_text(response.content if hasattr(response, "content") else str(response))
+        sql = clean_sql_text(coerce_ai_text(response))
         correction_prompt = prompt
     else:
         src = (
@@ -273,7 +274,7 @@ def run_executor(state: dict) -> dict:
                     message=f"Schema validation failed before execution, applying one correction pass: {validation_error}",
                 ).model_dump(),
             )
-            llm = get_gemini()
+            llm = get_llm()
             sql = repair_sql_with_feedback(
                 llm=llm,
                 dialect=connector.dialect,

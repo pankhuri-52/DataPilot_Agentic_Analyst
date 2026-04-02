@@ -1,6 +1,6 @@
 """
 DataPilot backend – FastAPI app.
-Health check and CORS; Gemini test endpoint; agents in later steps.
+Health check and CORS; OpenAI test endpoint; agents in later steps.
 """
 import json
 import logging
@@ -460,7 +460,7 @@ def get_suggested_questions(
     source_id: str | None = Query(None),
 ):
     """
-    RAG-style personalized prompts: chat history (+ optional query KB) + Gemini.
+    RAG-style personalized prompts: chat history (+ optional query KB) + OpenAI.
     See AGENTS.md: SUGGESTED_QUESTIONS_* env vars.
     """
     try:
@@ -512,7 +512,7 @@ def summarise_topic(request: Request, body: SummariseTopicRequest, user=Depends(
         ]
         if not user_texts:
             return {"topic": "", "request_id": request_id}
-        from llm import get_gemini, invoke_with_retry
+        from llm import get_llm, invoke_with_retry
 
         joined = "\n".join(f"- {t}" for t in user_texts[:12])
         prompt = (
@@ -521,7 +521,7 @@ def summarise_topic(request: Request, body: SummariseTopicRequest, user=Depends(
             "Return only the sentence, nothing else.\n\n"
             f"User questions:\n{joined}"
         )
-        llm = get_gemini()
+        llm = get_llm()
         result = invoke_with_retry(llm, prompt)
         topic = (result.content if hasattr(result, "content") else str(result)).strip()
         out = {"topic": topic[:200], "request_id": request_id}
@@ -1118,10 +1118,9 @@ def ask(
         if "RESOURCE_EXHAUSTED" in err_msg or "429" in err_msg:
             mark_quota_limited()
             err_msg = (
-                "Gemini API quota exceeded. The free tier allows 20 requests per day. "
-                "Options: (1) Wait until your quota resets tomorrow, "
-                "(2) Try GEMINI_MODEL=gemini-2.5-flash-lite in .env (may have separate quota), "
-                "(3) Enable billing at https://console.cloud.google.com for higher limits."
+                "OpenAI API rate limit or quota exceeded. "
+                "Try again shortly, lower request volume, or check billing/limits at "
+                "https://platform.openai.com/settings/organization/limits."
             )
         error_detail = err_msg
         raise HTTPException(status_code=503, detail=err_msg)
@@ -1322,10 +1321,9 @@ async def _ask_stream_generator(
         if "RESOURCE_EXHAUSTED" in err_msg or "429" in err_msg:
             mark_quota_limited()
             err_msg = (
-                "Gemini API quota exceeded. The free tier allows 20 requests per day. "
-                "Options: (1) Wait until your quota resets tomorrow, "
-                "(2) Try GEMINI_MODEL=gemini-2.5-flash-lite in .env (may have separate quota), "
-                "(3) Enable billing at https://console.cloud.google.com for higher limits."
+                "OpenAI API rate limit or quota exceeded. "
+                "Try again shortly, lower request volume, or check billing/limits at "
+                "https://platform.openai.com/settings/organization/limits."
             )
         error_detail = err_msg
         yield f"data: {json.dumps({'type': 'error', 'request_id': request_id, 'message': err_msg, 'agent': current_agent})}\n\n"
@@ -1418,10 +1416,26 @@ async def ask_continue(
     conversation_id = (body or {}).get("conversation_id")
     source_id = (body or {}).get("source_id")
     resume_payload = (body or {}).get("resume")
+    approved_in_body = "approved" in (body or {})
+    approved_payload = (body or {}).get("approved")
+    if resume_payload is not None and approved_in_body:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide either 'resume' or 'approved', not both.",
+        )
+    if resume_payload is None and not approved_in_body:
+        raise HTTPException(
+            status_code=400,
+            detail="Missing resume decision. Provide 'approved' (boolean) or 'resume' payload.",
+        )
     if resume_payload is not None:
+        if not isinstance(resume_payload, dict):
+            raise HTTPException(status_code=400, detail="'resume' must be an object payload.")
         resume_val: bool | dict = resume_payload
     else:
-        resume_val = (body or {}).get("approved", True)
+        if not isinstance(approved_payload, bool):
+            raise HTTPException(status_code=400, detail="'approved' must be a boolean.")
+        resume_val = approved_payload
     original_query = (body or {}).get("original_query", "").strip()
     idem_key = _idempotency_key(
         request,
@@ -1432,7 +1446,7 @@ async def ask_continue(
             "conversation_id": conversation_id,
             "source_id": source_id,
             "resume": resume_payload,
-            "approved": (body or {}).get("approved", True),
+            "approved": approved_payload,
             "original_query": original_query,
         },
     )
@@ -1480,12 +1494,12 @@ async def ask_continue(
         raise HTTPException(status_code=503, detail=f"Agent error: {str(e)}")
 
 
-# First API endpoint – Gemini test ----
+# First API endpoint – LLM test ----
 @app.post("/llm/chat")
 def llm_chat(request: Request, body: dict = Body(default={"message": "Hello! What can you help me with?"})):
     """
-    Basic Gemini test: send a message, get a reply.
-    Flow: Frontend/Postman → POST /llm/chat → this function → llm.get_gemini() → Gemini API → response.
+    Basic OpenAI test: send a message, get a reply.
+    Flow: Frontend/Postman → POST /llm/chat → this function → llm.get_llm() → OpenAI API → response.
     """
 
     request_id = _request_id_from(request)
@@ -1496,9 +1510,9 @@ def llm_chat(request: Request, body: dict = Body(default={"message": "Hello! Wha
     # If there is no message, use the default message
     message = (body or {}).get("message", "Hello! What can you help me with?")
     try:
-        from llm import get_gemini, invoke_with_retry
+        from llm import get_llm, invoke_with_retry
 
-        model = get_gemini()
+        model = get_llm()
         response = invoke_with_retry(model, message)
         content = response.content if hasattr(response, "content") else str(response)
         return {"reply": content, "request_id": request_id}

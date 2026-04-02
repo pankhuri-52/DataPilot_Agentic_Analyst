@@ -4,9 +4,9 @@ Proceeds automatically when feasibility is full or partial (no user approval).
 """
 import json
 
-from llm import get_gemini, invoke_with_retry
+from llm import get_llm, invoke_structured_with_retry
 from langfuse_setup import get_prompt
-from langfuse import get_client as _get_langfuse_client
+from langfuse_setup import safe_update_current_span
 from agents.state import DataFeasibility, TraceEntry
 from agents.context import get_effective_schema
 from agents.schema_utils import extract_data_ranges
@@ -97,8 +97,7 @@ def run_discovery(state: dict) -> dict:
     )
 
     try:
-        llm = get_gemini()
-        structured_llm = llm.with_structured_output(DataFeasibility, method="json_mode")
+        llm = get_llm()
         prompt = get_prompt("datapilot-discovery", DISCOVERY_PROMPT).format(
             metrics=metrics,
             dimensions=dimensions,
@@ -107,7 +106,7 @@ def run_discovery(state: dict) -> dict:
             data_ranges_section=data_ranges_section,
             user_csv_note=user_csv_note,
         )
-        result = invoke_with_retry(structured_llm, prompt)
+        result = invoke_structured_with_retry(llm, DataFeasibility, prompt)
 
         result_dict = result.model_dump() if hasattr(result, "model_dump") else result
         feasibility = result_dict.get("feasibility", "none")
@@ -120,22 +119,19 @@ def run_discovery(state: dict) -> dict:
             result_dict["nearest_plan"] = None
 
         tables_used = result_dict.get("tables_used", [])
-        try:
-            _get_langfuse_client().update_current_span(
-                input={
-                    "query": state.get("query", ""),
-                    "metrics": state.get("plan", {}).get("metrics", []) if state.get("plan") else [],
-                    "dimensions": state.get("plan", {}).get("dimensions", []) if state.get("plan") else [],
-                },
-                output={
-                    "feasibility": feasibility,
-                    "tables_used": tables_used,
-                    "missing_explanation": result_dict.get("missing_explanation"),
-                },
-                metadata={"agent": "discovery"},
-            )
-        except Exception:
-            pass
+        safe_update_current_span(
+            input={
+                "query": state.get("query", ""),
+                "metrics": state.get("plan", {}).get("metrics", []) if state.get("plan") else [],
+                "dimensions": state.get("plan", {}).get("dimensions", []) if state.get("plan") else [],
+            },
+            output={
+                "feasibility": feasibility,
+                "tables_used": tables_used,
+                "missing_explanation": result_dict.get("missing_explanation"),
+            },
+            metadata={"agent": "discovery"},
+        )
 
         feasibility_messages = {
             "full": "All requested metrics and dimensions are available in your connected data.",

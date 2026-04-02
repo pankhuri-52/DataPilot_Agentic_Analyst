@@ -18,7 +18,7 @@
 | Frontend | Next.js (App Router), Tailwind, shadcn/ui |
 | Backend | FastAPI |
 | Agents | LangGraph: planner → discovery → optimizer → executor → validator → visualization |
-| LLM | Google Gemini (`GOOGLE_API_KEY`, optional `GEMINI_MODEL`) |
+| LLM | OpenAI (`OPENAI_API_KEY`, optional `OPENAI_MODEL`) |
 | Warehouse | BigQuery and/or PostgreSQL via `db/factory.py` |
 | Auth & chat DB | Supabase (JWT from frontend; service role on server for chat writes) |
 
@@ -26,7 +26,7 @@
 
 - **Node.js** 18+ and **npm**
 - **Python** 3.11–3.12 (recommended). Avoid relying on a bleeding-edge **3.14+** install as your default `python` on Windows unless you have installed all dependencies there.
-- **Google AI API key** for Gemini
+- **OpenAI API key**
 - **Supabase** project (for login and chat persistence)
 - **BigQuery** (optional) or **PostgreSQL** (optional) for running queries
 
@@ -36,8 +36,10 @@ Create a `.env` file in the **project root** (same folder as `backend/` and `fro
 
 | Variable | Required | Purpose |
 |----------|----------|---------|
-| `GOOGLE_API_KEY` | Yes (agents) | Gemini |
-| `GEMINI_MODEL` | No | e.g. `gemini-2.5-flash` |
+| `OPENAI_API_KEY` | Yes (agents) | OpenAI |
+| `OPENAI_MODEL` | No | e.g. `gpt-4o-mini` |
+| `OPENAI_EMBEDDING_MODEL` | No | Default `text-embedding-3-small` |
+| `OPENAI_EMBEDDING_DIMENSION` | No | Default `768` (must match pgvector dimension) |
 | `SUPABASE_URL` | Yes (auth/chat) | Supabase project URL |
 | `SUPABASE_ANON_KEY` | Yes (auth) | Used by backend auth endpoints |
 | `SUPABASE_SERVICE_ROLE_KEY` | **Required for chat** | Backend chat module uses **only** this key; listing/saving conversations will not work without it |
@@ -54,7 +56,7 @@ Create a `.env` file in the **project root** (same folder as `backend/` and `fro
 | `CORS_ALLOW_ORIGIN_REGEX` | No | Unset = allow `http(s)://localhost` and `127.0.0.1` on **any port** (fixes Next on 3001). Set to empty to disable regex in production |
 | `DATAPILOT_SKIP_INTERRUPTS` | No | `true` / `1` to skip approval interrupts |
 | `SUGGESTED_QUESTIONS_ENABLED` | No | `0` disables homepage/new-chat suggested questions |
-| `SUGGESTED_QUESTIONS_LLM` | No | `0` skips Gemini calls for suggested questions (schema-seeded fallback only) |
+| `SUGGESTED_QUESTIONS_LLM` | No | `0` skips model calls for suggested questions (schema-seeded fallback only) |
 | `SUGGESTED_QUESTIONS_INCLUDE_KB` | No | `0` disables Query KB retrieval when composing suggestions |
 | `SUGGESTED_QUESTIONS_CACHE_TTL_SEC` | No | In-process cache TTL for suggestions (set `0` to disable cache) |
 

@@ -1,31 +1,24 @@
 """
-Text embeddings via Gemini API (gemini-embedding-001). Uses GOOGLE_API_KEY.
+Text embeddings via OpenAI API.
+Uses OPENAI_API_KEY.
 """
 from __future__ import annotations
 
-import json
 import logging
 import os
-import urllib.error
-import urllib.request
 
 from core.request_metrics import increment_counter
 from core.retry import retry_sync
 
 logger = logging.getLogger("datapilot.embeddings")
 
-_GEMINI_EMBED_MAX_ATTEMPTS = max(1, int(os.getenv("GEMINI_EMBED_MAX_ATTEMPTS", "2")))
-
-_GEMINI_EMBED_URL = (
-    "https://generativelanguage.googleapis.com/v1beta/models/{model}:embedContent"
-)
-
+_OPENAI_EMBED_MAX_ATTEMPTS = max(1, int(os.getenv("OPENAI_EMBED_MAX_ATTEMPTS", "2")))
 
 def _embedding_dimension() -> int:
-    raw = os.getenv("GEMINI_EMBEDDING_DIMENSION", "768").strip()
+    raw = os.getenv("OPENAI_EMBEDDING_DIMENSION", "768").strip()
     try:
         n = int(raw)
-        if n in (768, 1536, 3072):
+        if n in (512, 768, 1536, 3072):
             return n
     except ValueError:
         pass
@@ -33,7 +26,10 @@ def _embedding_dimension() -> int:
 
 
 def _embedding_model() -> str:
-    return os.getenv("GEMINI_EMBEDDING_MODEL", "gemini-embedding-001").strip() or "gemini-embedding-001"
+    return (
+        os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small").strip()
+        or "text-embedding-3-small"
+    )
 
 
 def embed_text(text: str, *, task_type: str = "RETRIEVAL_QUERY") -> list[float]:
@@ -41,52 +37,38 @@ def embed_text(text: str, *, task_type: str = "RETRIEVAL_QUERY") -> list[float]:
     Return embedding vector for text. task_type: RETRIEVAL_QUERY for search queries,
     RETRIEVAL_DOCUMENT for stored index strings (asymmetric retrieval).
     """
-    api_key = os.getenv("GOOGLE_API_KEY")
+    api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
-        raise ValueError("GOOGLE_API_KEY is not set (required for embeddings)")
+        raise ValueError("OPENAI_API_KEY is not set (required for embeddings)")
     t = (text or "").strip()
     if not t:
         raise ValueError("Cannot embed empty text")
 
     model = _embedding_model()
     dim = _embedding_dimension()
-    url = _GEMINI_EMBED_URL.format(model=model) + f"?key={api_key}"
-    body = {
-        "model": f"models/{model}",
-        "content": {"parts": [{"text": t}]},
-        "taskType": task_type,
-        "outputDimensionality": dim,
-    }
-    body_bytes = json.dumps(body).encode("utf-8")
 
     def _call():
         increment_counter("embedding_attempts", 1)
-        req = urllib.request.Request(
-            url,
-            data=body_bytes,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=60) as resp:
-                payload = json.loads(resp.read().decode("utf-8"))
-        except urllib.error.HTTPError as e:
-            err_body = e.read().decode("utf-8", errors="replace")
-            logger.warning("embed HTTP error %s: %s", e.code, err_body[:500])
-            raise ValueError(f"Embedding API error {e.code}: {err_body[:200]}") from e
+        from openai import OpenAI
 
-        emb = (payload.get("embedding") or {}).get("values")
+        client = OpenAI(api_key=api_key, timeout=60.0)
+        kwargs = {"model": model, "input": t}
+        if model.startswith("text-embedding-3"):
+            kwargs["dimensions"] = dim
+
+        response = client.embeddings.create(**kwargs)
+        emb = response.data[0].embedding if response.data else None
         if not isinstance(emb, list) or not emb:
             raise ValueError("Embedding API returned no values")
         if len(emb) != dim:
             logger.warning(
-                "Embedding length %s != expected %s — check GEMINI_EMBEDDING_DIMENSION vs DB vector(N)",
+                "Embedding length %s != expected %s — check OPENAI_EMBEDDING_DIMENSION vs DB vector(N)",
                 len(emb),
                 dim,
             )
         return [float(x) for x in emb]
 
-    return retry_sync("gemini.embed", _call, max_attempts=_GEMINI_EMBED_MAX_ATTEMPTS)
+    return retry_sync("openai.embed", _call, max_attempts=_OPENAI_EMBED_MAX_ATTEMPTS)
 
 
 def embed_text_with_retry(text: str, *, task_type: str = "RETRIEVAL_QUERY") -> list[float]:

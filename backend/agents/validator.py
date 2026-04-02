@@ -3,9 +3,9 @@ Validation Agent – sanity checks on query results.
 """
 from agents.state import TraceEntry
 from agents.trace_stream import append_trace
-from llm import get_gemini, invoke_with_retry
+from llm import coerce_ai_text, get_llm, invoke_with_retry
 from langfuse_setup import get_prompt
-from langfuse import get_client as _get_langfuse_client
+from langfuse_setup import safe_update_current_span
 
 _RELEVANCE_PROMPT = """You are a data quality checker. Your only job is to decide whether a SQL result set
 actually answers the user's question.
@@ -95,14 +95,11 @@ def run_validator(state: dict) -> dict:
                 "trace": trace,
             }
 
-    try:
-        _get_langfuse_client().update_current_span(
-            input={"query": state.get("query", ""), "row_count": len(raw_results) if raw_results else 0},
-            output={"validation_ok": validation_ok, "issues": issues},
-            metadata={"agent": "validator"},
-        )
-    except Exception:
-        pass
+    safe_update_current_span(
+        input={"query": state.get("query", ""), "row_count": len(raw_results) if raw_results else 0},
+        output={"validation_ok": validation_ok, "issues": issues},
+        metadata={"agent": "validator"},
+    )
     return {"validation_ok": validation_ok, "trace": trace}
 
 
@@ -119,10 +116,10 @@ def _check_relevance(state: dict, raw_results: list, trace: list) -> tuple[bool,
     )
 
     try:
-        llm = get_gemini()
+        llm = get_llm()
         prompt = get_prompt("datapilot-validator-relevance", _RELEVANCE_PROMPT).format(query=query, sql=sql, sample=sample)
         response = invoke_with_retry(llm, prompt)
-        text = (response.content if hasattr(response, "content") else str(response)).strip()
+        text = coerce_ai_text(response).strip()
 
         first_line = text.split("\n")[0].strip().upper()
         explanation = text.split("\n", 1)[1].strip() if "\n" in text else ""
