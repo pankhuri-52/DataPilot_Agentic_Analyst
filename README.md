@@ -19,13 +19,9 @@
 
 ## 🎬 Demo
 
-> **▶️ Add your screen recording here.** Drop a short (60–90s) `.gif` or `.mp4` into a `docs/` folder and embed it, e.g.:
->
-> ```markdown
-> ![DataPilot demo](docs/Video-Project.gif)
-> ```
->
-> Tip: a GIF autoplays inline on GitHub; for an MP4, upload it to a GitHub Release or drag it into a README edit on github.com and paste the generated link.
+![DataPilot demo](docs/Video-Project.gif)
+
+> _Ask a question → see the plan, the SQL, the approval gate, and the chart._
 
 ## 🧠 How it works
 
