@@ -29,6 +29,12 @@ dist/
 .DS_Store
 Thumbs.db
 
+# Media / large files (host demos via GitHub Releases or compress to GIF)
+*.mp4
+*.mov
+*.avi
+*.mkv
+
 # Logs and temp
 *.log
 .cache/
