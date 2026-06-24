@@ -59,7 +59,7 @@ I thought hard about this. A SaaS would mean billing, multi-tenancy, support, an
 
 So it's **MIT licensed, bring-your-own-key, and open to contributions.**
 
-👉 **Repo:** [GITHUB_REPO_LINK]
+👉 **Repo:** https://github.com/pankhuri-52/DataPilot_Agentic_Analyst
 🎬 **60-second demo** is in the README.
 
 If you're building agentic apps — or you've wrestled with "chat with your data" reliability — I'd love your thoughts, issues, and PRs.
@@ -88,7 +88,7 @@ What would you add next: more warehouse connectors, a semantic layer, or a self-
 >
 > It's MIT licensed and bring-your-own-key — clone it, plug in your keys, point it at your warehouse.
 >
-> ⭐ Repo + 60s demo: [GITHUB_REPO_LINK]
+> ⭐ Repo + 60s demo: https://github.com/pankhuri-52/DataPilot_Agentic_Analyst
 >
 > Building agentic apps or fighting "chat with your data" reliability? I'd love your feedback, issues, and PRs.
 >
