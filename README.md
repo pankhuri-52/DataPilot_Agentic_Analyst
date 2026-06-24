@@ -1,6 +1,48 @@
-# DataPilot
+<div align="center">
 
-**DataPilot** is a web app for asking natural-language questions about data in your warehouse. It provides a focused chat UI, a multi-agent backend (plan → discover schema → generate SQL → execute → validate → chart), and optional Supabase auth so conversations persist.
+# 🧭 DataPilot
+
+### Ask your data warehouse questions in plain English — get SQL, charts, and analysis from a multi-agent AI pipeline.
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://www.python.org/)
+[![Next.js 14](https://img.shields.io/badge/Next.js-14-black.svg)](https://nextjs.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-009688.svg)](https://fastapi.tiangolo.com/)
+[![LangGraph](https://img.shields.io/badge/LangGraph-Agents-FF6F00.svg)](https://langchain-ai.github.io/langgraph/)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
+
+</div>
+
+---
+
+**DataPilot** turns a question like _"What were our top 10 products by revenue last month?"_ into a planned analysis, validated SQL, an approval gate, and an interactive chart — all driven by a hub-and-spoke team of LLM agents. It pairs a focused chat UI with a multi-agent backend (**plan → discover schema → generate SQL → execute → validate → chart**) and Supabase auth so conversations persist.
+
+## 🎬 Demo
+
+> **▶️ Add your screen recording here.** Drop a short (60–90s) `.gif` or `.mp4` into a `docs/` folder and embed it, e.g.:
+>
+> ```markdown
+> ![DataPilot demo](docs/demo.gif)
+> ```
+>
+> Tip: a GIF autoplays inline on GitHub; for an MP4, upload it to a GitHub Release or drag it into a README edit on github.com and paste the generated link.
+
+## 🧠 How it works
+
+```mermaid
+flowchart LR
+    U([User question]) --> O{{Orchestrator<br/>LLM router}}
+    O --> P[Planner<br/>metrics, dims, scope]
+    P --> D[Discovery<br/>schema feasibility]
+    D --> Opt[Optimizer<br/>SQL generation]
+    Opt -->|human-in-the-loop<br/>approval gate| E[Executor<br/>run query]
+    E --> V[Validator<br/>check results]
+    V --> Viz[Visualization<br/>chart spec]
+    Viz --> R([Answer + chart])
+    O -.-> KB[(Query KB<br/>pgvector)]
+```
+
+Every step is traced in **Langfuse**, guarded by **scope** and **time-window** checks, and gated by **human-in-the-loop** approvals before any query runs.
 
 ## Features
 
@@ -21,6 +63,60 @@
 | LLM | OpenAI (`OPENAI_API_KEY`, optional `OPENAI_MODEL`) |
 | Warehouse | BigQuery and/or PostgreSQL via `db/factory.py` |
 | Auth & chat DB | Supabase (JWT from frontend; service role on server for chat writes) |
+
+## ⚡ Quickstart
+
+DataPilot touches a few services, so here are two paths. **Start with Tier 1** to see the
+agents work in ~5 minutes, then graduate to the full app when you want login + saved chats.
+
+### Tier 1 — Try the agents via the API (minimal: OpenAI + one warehouse)
+
+No Supabase and no frontend needed — auth is optional on the `/ask` endpoints.
+
+```bash
+# 1. Clone and enter the repo
+git clone <your-repo-url> && cd <repo>
+
+# 2. Create your env file (project root) and set the essentials:
+cp .env.example .env
+#   OPENAI_API_KEY=sk-...
+#   DATABASE_TYPE=postgres
+#   DATABASE_URL=postgresql://user:pass@host:5432/db   # any Postgres you can reach
+#   DATAPILOT_SKIP_INTERRUPTS=true                     # one-shot, no approval pause
+
+# 3. Run the backend
+cd backend
+python -m pip install -r requirements.txt
+python -m uvicorn main:app --reload
+```
+
+Open **http://localhost:8000/docs**, expand `POST /ask`, and send:
+
+```json
+{ "query": "What were total sales by month?" }
+```
+
+You'll get back the plan, generated SQL, results, and a chart spec.
+> Using BigQuery instead of Postgres? Set `BIGQUERY_PROJECT_ID` + credentials and load the
+> sample retail dataset from [`backend/bigquery/scripts/`](backend/bigquery/scripts/).
+
+### Tier 2 — Full app (adds login, saved conversations, and the chat UI)
+
+1. Create a **Supabase** project and add `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and
+   `SUPABASE_SERVICE_ROLE_KEY` to `.env`.
+2. Run the migration in your Supabase SQL Editor — see [Database & Supabase](#database--supabase) below.
+3. Start the frontend:
+
+   ```bash
+   cd frontend
+   npm install
+   npm run dev
+   ```
+
+4. Open **http://localhost:3000**, sign up, and start a chat.
+
+Full variable reference is in [Environment variables](#environment-variables); platform-specific
+gotchas (Windows Python versions, ports, CORS) are in [How to run locally](#how-to-run-locally).
 
 ## Prerequisites
 
@@ -154,6 +250,13 @@ Scripts under [`backend/bigquery/scripts/`](backend/bigquery/scripts/) can creat
 
 For contributors and AI assistants, see **[AGENTS.md](AGENTS.md)**.
 
+## Contributing
+
+Contributions are welcome! Whether it's a bug fix, a new data connector, an agent
+improvement, or docs — start with **[CONTRIBUTING.md](CONTRIBUTING.md)** and
+**[AGENTS.md](AGENTS.md)**. Open an issue to discuss larger changes first.
+
 ## License
 
-Add your license here if applicable.
+Released under the [MIT License](LICENSE) — free to use, modify, and build on.
+Bring your own API keys (OpenAI, Supabase, your warehouse) and you're set.

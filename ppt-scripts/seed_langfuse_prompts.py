@@ -30,6 +30,7 @@ if load_dotenv:
         if env.exists():
             load_dotenv(env, override=False)
 
+from agents.orchestrator import _ORCHESTRATOR_PROMPT  # noqa: E402
 from agents.planner import PLANNER_PROMPT  # noqa: E402
 from agents.discovery import DISCOVERY_PROMPT  # noqa: E402
 from agents.optimizer import OPTIMIZER_PROMPT_BIGQUERY, OPTIMIZER_PROMPT_POSTGRES  # noqa: E402
@@ -41,6 +42,7 @@ from langfuse_setup import langfuse_configured, python_format_to_langfuse_text  
 
 
 PROMPTS: list[tuple[str, str]] = [
+    ("datapilot-orchestrator", _ORCHESTRATOR_PROMPT),
     ("datapilot-planner", PLANNER_PROMPT),
     ("datapilot-discovery", DISCOVERY_PROMPT),
     ("datapilot-optimizer-bigquery", OPTIMIZER_PROMPT_BIGQUERY),
