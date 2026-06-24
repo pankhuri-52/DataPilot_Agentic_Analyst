@@ -2,28 +2,35 @@
 
 # 🧭 DataPilot
 
-### Ask your data warehouse questions in plain English — get SQL, charts, and analysis from a multi-agent AI pipeline.
+### Talk to your data warehouse like a coworker. Get back SQL, charts, and answers.
+
+*Ask "What were our top 10 products by revenue last month?" — DataPilot plans the analysis, writes the SQL, asks before it runs anything, and hands you a chart. No SQL required.*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://www.python.org/)
 [![Next.js 14](https://img.shields.io/badge/Next.js-14-black.svg)](https://nextjs.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-009688.svg)](https://fastapi.tiangolo.com/)
-[![LangGraph](https://img.shields.io/badge/LangGraph-Agents-FF6F00.svg)](https://langchain-ai.github.io/langgraph/)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
 </div>
 
 ---
 
-**DataPilot** turns a question like _"What were our top 10 products by revenue last month?"_ into a planned analysis, validated SQL, an approval gate, and an interactive chart — all driven by a hub-and-spoke team of LLM agents. It pairs a focused chat UI with a multi-agent backend (**plan → discover schema → generate SQL → execute → validate → chart**) and Supabase auth so conversations persist.
+Most "chat with your data" tools are a black box: you type a question, you get a number, and you just… trust it. DataPilot does the opposite. It shows its work — the plan it made, the SQL it wrote, and a checkpoint where **you** approve the query before it touches your warehouse. Under the hood it's a little team of LLM agents passing the question down a line:
 
-## 🎬 Demo
+> **plan → find the right tables → write SQL → (you approve) → run it → sanity-check → chart it**
+
+The result: answers you can actually defend, not just paste into a deck.
+
+## 🎬 See it in action
 
 ![DataPilot demo](docs/Video-Project.gif)
 
-> _Ask a question → see the plan, the SQL, the approval gate, and the chart._
+> _One question in → watch the plan form, read the SQL, hit approve, get your chart._
 
 ## 🧠 How it works
+
+Each box is one agent with one job. The orchestrator routes the question; everything downstream is a focused step you can read, trace, and trust.
 
 ```mermaid
 flowchart LR
@@ -38,143 +45,159 @@ flowchart LR
     O -.-> KB[(Query KB<br/>pgvector)]
 ```
 
-Every step is traced in **Langfuse**, guarded by **scope** and **time-window** checks, and gated by **human-in-the-loop** approvals before any query runs.
+Every hop is traced in **Langfuse**, fenced in by **scope** and **time-window** guardrails, and — unless you opt out — paused for a **human approval** before any SQL runs.
 
-## Features
+## ✨ What makes it nice to use
 
-- **Chat-first analytics** – Ask questions in plain English; see an analysis plan, step-by-step agent progress, and results with charts, tables, and SQL when available.
-- **Scope guardrails** – Off-topic questions get a clear “outside your data” response; vague questions ask for clarification (`query_scope` in the planner).
-- **Time-window guardrails** – Relative dates like “last month” are validated against catalogued `data_range` metadata before SQL execution. If the requested window is outside available data, the flow fails fast with an actionable clarification.
-- **Conversation history** – Signed-in users get titled threads in Supabase; the backend chat API **requires** **`SUPABASE_SERVICE_ROLE_KEY`**. Sessions stay signed in across reloads via refresh token (`POST /auth/refresh`).
-- **Data sources** – Primary warehouse is **environment-driven** (BigQuery or PostgreSQL). The **Data Sources** page calls `GET /data-sources/status` for live configuration/health—not mock data.
-- **Human-in-the-loop (optional)** – By default, the graph pauses for table approval and query execution approval. Set **`DATAPILOT_SKIP_INTERRUPTS=true`** in `.env` for a one-shot demo (skips both interrupts).
+- **🗣️ Just ask** — plain-English questions in, an analysis plan + step-by-step agent progress + charts/tables/SQL out.
+- **🚧 It knows its lane** — ask something off-topic and it says "that's outside your data" instead of hallucinating a query. Vague questions get a clarifying question back.
+- **📅 It won't make up dates** — "last month" is checked against the actual date range in your tables before any SQL runs. Out of range? You get a clear "here's what I *do* have" instead of an empty chart.
+- **💬 Your chats stick around** — signed-in users get titled, saved threads (via Supabase), and stay logged in across reloads.
+- **🔌 Bring your own warehouse** — point it at **BigQuery** or **PostgreSQL** with one env var.
+- **✋ You're in control** — the graph pauses for table + query approval by default. Want a fast, no-clicks demo? Flip `DATAPILOT_SKIP_INTERRUPTS=true`.
 
-## Architecture
+## 🧱 The stack
 
-| Layer | Stack |
+| Layer | What it's built on |
 |--------|--------|
 | Frontend | Next.js (App Router), Tailwind, shadcn/ui |
 | Backend | FastAPI |
-| Agents | LangGraph: planner → discovery → optimizer → executor → validator → visualization |
+| Agents | LangGraph — planner → discovery → optimizer → executor → validator → visualization |
 | LLM | OpenAI (`OPENAI_API_KEY`, optional `OPENAI_MODEL`) |
-| Warehouse | BigQuery and/or PostgreSQL via `db/factory.py` |
-| Auth & chat DB | Supabase (JWT from frontend; service role on server for chat writes) |
+| Warehouse | BigQuery and/or PostgreSQL (`db/factory.py` picks one) |
+| Auth & chat history | Supabase |
 
-## ⚡ Quickstart
+## ⚡ Get it running
 
-DataPilot touches a few services, so here are two paths. **Start with Tier 1** to see the
-agents work in ~5 minutes, then graduate to the full app when you want login + saved chats.
+DataPilot talks to a few services, so we've split the setup into two paths. **Do Tier 1 first** — you'll have the agents answering questions in about 5 minutes. Add the full app when you want logins and saved chats.
 
-### Tier 1 — Try the agents via the API (minimal: OpenAI + one warehouse)
+### Tier 1 — Just the agents (OpenAI + one warehouse)
 
-No Supabase and no frontend needed — auth is optional on the `/ask` endpoints.
+No Supabase, no frontend, no login. The `/ask` endpoints work without auth.
 
 ```bash
-# 1. Clone and enter the repo
+# 1. Grab the code
 git clone <your-repo-url> && cd <repo>
 
-# 2. Create your env file (project root) and set the essentials:
+# 2. Set up your .env (in the project root) with the essentials:
 cp .env.example .env
 #   OPENAI_API_KEY=sk-...
 #   DATABASE_TYPE=postgres
 #   DATABASE_URL=postgresql://user:pass@host:5432/db   # any Postgres you can reach
-#   DATAPILOT_SKIP_INTERRUPTS=true                     # one-shot, no approval pause
+#   DATAPILOT_SKIP_INTERRUPTS=true                     # skip the approval pauses for a quick spin
 
-# 3. Run the backend
+# 3. Boot the backend
 cd backend
 python -m pip install -r requirements.txt
 python -m uvicorn main:app --reload
 ```
 
-Open **http://localhost:8000/docs**, expand `POST /ask`, and send:
+Now open **http://localhost:8000/docs**, expand `POST /ask`, and send:
 
 ```json
 { "query": "What were total sales by month?" }
 ```
 
-You'll get back the plan, generated SQL, results, and a chart spec.
-> Using BigQuery instead of Postgres? Set `BIGQUERY_PROJECT_ID` + credentials and load the
+Back comes the plan, the generated SQL, the results, and a chart spec. 🎉
+
+> **On BigQuery instead of Postgres?** Set `BIGQUERY_PROJECT_ID` + credentials and load the
 > sample retail dataset from [`backend/bigquery/scripts/`](backend/bigquery/scripts/).
 
-### Tier 2 — Full app (adds login, saved conversations, and the chat UI)
+### Tier 2 — The full app (login + saved chats + the UI)
 
-1. Create a **Supabase** project and add `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and
-   `SUPABASE_SERVICE_ROLE_KEY` to `.env`.
-2. Run the migration in your Supabase SQL Editor — see [Database & Supabase](#database--supabase) below.
-3. Start the frontend:
+1. Spin up a **Supabase** project and add `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY` to `.env`.
+2. Run the migration in the Supabase SQL Editor — see [Set up the database](#-set-up-the-database) below.
+3. Start everything:
 
    ```bash
-   cd frontend
-   npm install
-   npm run dev
+   # One command from the project root — runs the frontend AND backend together:
+   npm install && npm run dev
    ```
 
-4. Open **http://localhost:3000**, sign up, and start a chat.
+   Prefer two terminals? Run the backend as in Tier 1, then `cd frontend && npm install && npm run dev`.
 
-Full variable reference is in [Environment variables](#environment-variables); platform-specific
-gotchas (Windows Python versions, ports, CORS) are in [How to run locally](#how-to-run-locally).
+4. Open **http://localhost:3000**, sign up, and start chatting.
 
-## Prerequisites
+Need the full knob list? It's in [Configuration](#-configuration). Hit a snag? See [Running locally & troubleshooting](#-running-locally--troubleshooting).
+
+## 📋 Before you start
 
 - **Node.js** 18+ and **npm**
-- **Python** 3.11–3.12 (recommended). Avoid relying on a bleeding-edge **3.14+** install as your default `python` on Windows unless you have installed all dependencies there.
-- **OpenAI API key**
-- **Supabase** project (for login and chat persistence)
-- **BigQuery** (optional) or **PostgreSQL** (optional) for running queries
+- **Python** 3.11–3.12 (on Windows, don't let a bleeding-edge 3.14 be your default `python` unless you've installed deps there)
+- An **OpenAI API key**
+- A **Supabase** project — only if you want login + chat history
+- **BigQuery** or **PostgreSQL** — to actually run queries
 
-## Environment variables
+## ⚙️ Configuration
 
-Create a `.env` file in the **project root** (same folder as `backend/` and `frontend/`).
+Create a `.env` in the **project root** (next to `backend/` and `frontend/`). These are the ones you'll actually touch to get going:
+
+| Variable | Required? | What it's for |
+|----------|----------|---------|
+| `OPENAI_API_KEY` | Yes (agents) | Your OpenAI key |
+| `SUPABASE_URL` | Yes (auth/chat) | Supabase project URL |
+| `SUPABASE_ANON_KEY` | Yes (auth) | Backend auth endpoints |
+| `SUPABASE_SERVICE_ROLE_KEY` | **Yes, for chat** | Chat saves/lists use **only** this key — no fallback |
+| `DATABASE_TYPE` | If using Postgres | Set to `postgres` |
+| `POSTGRES_URL` / `DATABASE_URL` | If Postgres | Connection string |
+| `BIGQUERY_PROJECT_ID` | If using BigQuery | GCP project |
+| `GOOGLE_APPLICATION_CREDENTIALS` | If using BigQuery | Path to service-account JSON (or use ADC) |
+| `DATAPILOT_SKIP_INTERRUPTS` | No | `true` to skip approval pauses (great for demos) |
+
+<details>
+<summary><b>The full list</b> — models, BigQuery-on-serverless, CORS, suggested-question toggles, Query KB tuning</summary>
 
 | Variable | Required | Purpose |
 |----------|----------|---------|
-| `OPENAI_API_KEY` | Yes (agents) | OpenAI |
 | `OPENAI_MODEL` | No | e.g. `gpt-4o-mini` |
 | `OPENAI_EMBEDDING_MODEL` | No | Default `text-embedding-3-small` |
-| `OPENAI_EMBEDDING_DIMENSION` | No | Default `768` (must match pgvector dimension) |
-| `SUPABASE_URL` | Yes (auth/chat) | Supabase project URL |
-| `SUPABASE_ANON_KEY` | Yes (auth) | Used by backend auth endpoints |
-| `SUPABASE_SERVICE_ROLE_KEY` | **Required for chat** | Backend chat module uses **only** this key; listing/saving conversations will not work without it |
-| `BIGQUERY_PROJECT_ID` | If using BQ | GCP project |
+| `OPENAI_EMBEDDING_DIMENSION` | No | Default `768` (must match your pgvector dimension) |
+| `DATAPILOT_CREDENTIALS_KEY` | If saving sources | Fernet key encrypting saved data-source credentials |
 | `BIGQUERY_DATASET` | No | Default `retail_data` |
-| `GOOGLE_APPLICATION_CREDENTIALS` | If using BQ | Path to service account JSON (or use ADC) |
-| `GCP_SERVICE_ACCOUNT_JSON` | If using BQ on serverless | Full service account JSON as one string (minified). If the host mangles quotes, use `GCP_SERVICE_ACCOUNT_JSON_B64` instead |
-| `GCP_SERVICE_ACCOUNT_JSON_B64` | If using BQ on serverless | Standard Base64 (UTF-8) of the entire `*.json` file — most reliable in the Vercel env UI |
-| `DATABASE_TYPE` | If using Postgres | `postgres` |
-| `POSTGRES_URL` or `DATABASE_URL` | If Postgres | Connection string |
-| `FRONTEND_URL` | No | Password reset redirect (default `http://localhost:3000`) |
+| `GCP_SERVICE_ACCOUNT_JSON` | BQ on serverless | Full service-account JSON as one minified string. If the host mangles quotes, use the B64 form below |
+| `GCP_SERVICE_ACCOUNT_JSON_B64` | BQ on serverless | Base64 (UTF-8) of the entire `*.json` — most reliable in the Vercel UI |
+| `FRONTEND_URL` | No | Password-reset redirect (default `http://localhost:3000`) |
 | `NEXT_PUBLIC_API_URL` | No | Frontend → API (default `http://localhost:8000`) |
-| `CORS_ALLOW_ORIGINS` | No | Comma-separated list; if unset, defaults include `localhost`/`127.0.0.1` on 3000–3001 |
-| `CORS_ALLOW_ORIGIN_REGEX` | No | Unset = allow `http(s)://localhost` and `127.0.0.1` on **any port** (fixes Next on 3001). Set to empty to disable regex in production |
-| `DATAPILOT_SKIP_INTERRUPTS` | No | `true` / `1` to skip approval interrupts |
-| `SUGGESTED_QUESTIONS_ENABLED` | No | `0` disables homepage/new-chat suggested questions |
-| `SUGGESTED_QUESTIONS_LLM` | No | `0` skips model calls for suggested questions (schema-seeded fallback only) |
-| `SUGGESTED_QUESTIONS_INCLUDE_KB` | No | `0` disables Query KB retrieval when composing suggestions |
-| `SUGGESTED_QUESTIONS_CACHE_TTL_SEC` | No | In-process cache TTL for suggestions (set `0` to disable cache) |
+| `CORS_ALLOW_ORIGINS` | No | Comma-separated allowlist; defaults cover `localhost`/`127.0.0.1` on 3000–3001 |
+| `CORS_ALLOW_ORIGIN_REGEX` | No | Unset = allow loopback on **any** port (fixes Next on 3001). Set empty to disable in prod |
+| `SUGGESTED_QUESTIONS_ENABLED` | No | `0` turns off homepage/new-chat suggestions |
+| `SUGGESTED_QUESTIONS_LLM` | No | `0` skips model calls for suggestions (schema-seeded fallback only) |
+| `SUGGESTED_QUESTIONS_INCLUDE_KB` | No | `0` skips Query KB retrieval when composing suggestions |
+| `SUGGESTED_QUESTIONS_CACHE_TTL_SEC` | No | In-process cache TTL for suggestions (`0` disables it) |
+| `QUERY_KB_MIN_SIMILARITY` | No | pgvector match threshold (default `0.78`) |
+| `QUERY_KB_RELAXED_MIN_SIMILARITY` | No | Second-pass threshold (default `0.68`; `none` to disable) |
+| `LANGFUSE_SECRET_KEY` / `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_HOST` | No | Tracing via Langfuse |
+| `LOG_LEVEL` | No | Default `INFO` |
 
-## Database & Supabase
+</details>
 
-**Required before chat history works:** create the tables in **your** Supabase project.
+## 🗄️ Set up the database
+
+**Do this before chat history will work** — the tables live in *your* Supabase project, not ours.
 
 1. Open [Supabase](https://supabase.com) → your project → **SQL Editor** → New query.
-2. Copy the **entire** file [`backend/supabase_migrations/migrations/001_conversations.sql`](backend/supabase_migrations/migrations/001_conversations.sql) into the editor and click **Run**.
-3. You should see `conversations` and `messages` under **Table Editor**. If you skip this step, the API returns error **PGRST205** (“table not in schema cache”) and the sidebar shows a chat sync error.
+2. Paste in the **entire** [`001_conversations.sql`](backend/supabase_migrations/migrations/001_conversations.sql) and click **Run**.
+3. You should now see `conversations` and `messages` under **Table Editor**.
 
-See [`backend/supabase_migrations/README.md`](backend/supabase_migrations/README.md) for keys, RLS, and optional migrations.
+Skip this and the API will hand back error **PGRST205** ("table not in schema cache") and the sidebar will show a chat-sync error — that's your sign the migration didn't run. For keys, RLS, and the optional migrations, see [`backend/supabase_migrations/README.md`](backend/supabase_migrations/README.md).
 
-## How to run locally
+## 🏃 Running locally & troubleshooting
 
-**Backend**
-
-Use the **same** Python interpreter for `pip` and `uvicorn` (on Windows, `python` may point to 3.14 while `pip` installed packages for 3.12, which causes `No module named 'supabase'`).
+**The short version:**
 
 ```bash
-cd backend
-python -m pip install -r requirements.txt
-python -m uvicorn main:app --reload
+# Backend
+cd backend && python -m pip install -r requirements.txt && python -m uvicorn main:app --reload
+# Frontend (second terminal)
+cd frontend && npm install && npm run dev
 ```
 
-**Windows (multiple Python versions):** if `python` is 3.14 but packages are on 3.12, pin the launcher:
+- API → http://localhost:8000  ·  Docs → http://localhost:8000/docs  ·  App → http://localhost:3000
+
+<details>
+<summary><b>Things that bite people</b> (Windows Python versions, "Failed to fetch", port 3000, OneDrive)</summary>
+
+**Use the *same* Python for `pip` and `uvicorn`.** On Windows, `python` might be 3.14 while your packages landed on 3.12 — that's the classic `No module named 'supabase'`. Pin the launcher:
 
 ```powershell
 cd backend
@@ -182,77 +205,59 @@ py -3.12 -m pip install -r requirements.txt
 py -3.12 -m uvicorn main:app --reload
 ```
 
-- API: http://localhost:8000  
-- OpenAPI: http://localhost:8000/docs  
+If `Auth error: No module named 'supabase'` shows up, the interpreter running FastAPI just doesn't have `requirements.txt` installed. Compare `python --version` with `where python` and install against that exact interpreter.
 
-**Troubleshooting:** `Auth error: No module named 'supabase'` means the interpreter running FastAPI does not have `requirements.txt` installed. Run `python -m pip install -r requirements.txt` with that exact interpreter (see `python --version` vs `where python`).
+**Login says "Failed to fetch" and the API logs `OPTIONS /auth/login` 400** → a CORS mismatch: your browser's `Origin` (e.g. `http://localhost:3001` or `http://127.0.0.1:3000`) didn't match. This project allows loopback on any port by default — just restart the API after pulling. Deploying to a real domain? Set `CORS_ALLOW_ORIGINS` (and optionally `CORS_ALLOW_ORIGIN_REGEX=` empty).
 
-**Frontend**
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-- App: http://localhost:3000  
-
-Ensure `NEXT_PUBLIC_API_URL` matches your API origin if not using defaults.
-
-**Login shows “Failed to fetch” and the API logs `OPTIONS /auth/login` 400:** the browser’s `Origin` (e.g. `http://localhost:3001` or `http://127.0.0.1:3000`) did not match CORS. This project allows loopback on any port by default via `allow_origin_regex`; restart the API after pulling changes. If you deploy behind a real domain, set `CORS_ALLOW_ORIGINS` (and optionally `CORS_ALLOW_ORIGIN_REGEX=` empty).
-
-**Port 3000 already in use:** another process (often a previous `npm run dev`) is bound to 3000. Either stop it (Task Manager / close the old terminal) or run on another port — the updated CORS rules allow `localhost` and `127.0.0.1` on any port:
+**Port 3000 already in use** → an old `npm run dev` is probably still bound. Stop it, or run elsewhere:
 
 ```bash
-cd frontend
-npx next dev -p 3001
+cd frontend && npx next dev -p 3001
 ```
 
-## Main API endpoints
+**Windows + OneDrive + `frontend/.next`** → if `next dev` throws `EBUSY: resource busy or locked` and the browser shows Internal Server Error, OneDrive is fighting the dev server over build files. Stop all Node processes, delete `frontend/.next`, and restart. Longer term: pause OneDrive while developing, or clone the repo *outside* OneDrive (e.g. `C:\dev\...`).
 
-| Method | Path | Description |
+Make sure `NEXT_PUBLIC_API_URL` matches your API origin if you've moved off the defaults.
+
+</details>
+
+## 🔌 The API at a glance
+
+| Method | Path | What it does |
 |--------|------|-------------|
-| POST | `/ask/stream` | SSE: agent progress, then `complete` or `interrupt` |
-| POST | `/ask/continue` | Resume after interrupt (`thread_id`, `conversation_id`, `approved`, optional `original_query`) |
-| POST | `/ask` | Blocking full run |
-| GET | `/data-sources/status` | Primary warehouse config + health (for UI) |
-| GET | `/conversations` | List threads (auth) |
-| POST | `/conversations` | Create thread (auth) |
-| GET | `/conversations/{id}/messages` | Messages (auth) |
+| POST | `/ask/stream` | SSE — live agent progress, then `complete` or `interrupt` |
+| POST | `/ask/continue` | Resume after an interrupt (`thread_id`, `conversation_id`, `approved`, optional `original_query`) |
+| POST | `/ask` | One-shot blocking run |
+| GET | `/data-sources/status` | Warehouse config + health (powers the Sources page) |
+| GET | `/conversations` | List your threads (auth) |
+| POST | `/conversations` | Start a thread (auth) |
+| GET | `/conversations/{id}/messages` | Messages in a thread (auth) |
 | POST | `/auth/login`, `/auth/signup` | Supabase auth |
 
-## BigQuery sample data (optional)
+## 📊 Sample data (optional)
 
-Scripts under [`backend/bigquery/scripts/`](backend/bigquery/scripts/) can create and load POC tables (`DDL/` and `DML/`). See [`backend/bigquery/scripts/README_DATA_MODEL.md`](backend/bigquery/scripts/README_DATA_MODEL.md) for the model and example questions.
+Want a realistic retail dataset to poke at? The scripts under [`backend/bigquery/scripts/`](backend/bigquery/scripts/) create and load POC tables (`DDL/` then `DML/`). The data model, run order, and example business questions are in [`README_DATA_MODEL.md`](backend/bigquery/scripts/README_DATA_MODEL.md).
 
-## Date availability behavior
+A note on dates: the planner and discovery agents validate time windows against the `data_range` values in [`backend/schema/metadata.json`](backend/schema/metadata.json). **After you reseed or swap warehouse data, update those min/max dates** — otherwise the date guardrails and suggestions will be working off stale info.
 
-- Planner and discovery validate requested time windows using `data_range` values in [`backend/schema/metadata.json`](backend/schema/metadata.json).
-- Suggested questions are filtered so prompts like “last month” are dropped when that relative window falls outside catalogued dates.
-- If a question is outside available range, DataPilot returns a clarification with available min/max dates instead of executing SQL through all downstream steps.
-- After reseeding or changing warehouse data, update `data_range` values in `metadata.json` to keep guardrails and suggestions accurate.
+## 🚪 Known limits (honesty corner)
 
-## Limitations
+- The **Sources UI** doesn't add arbitrary connectors yet — configuration is via `.env`.
+- **Chat history** needs sign-in + a working Supabase service role.
+- **Interrupts** pause the stream until you continue — use `DATAPILOT_SKIP_INTERRUPTS` for smoother demos.
 
-- **Sources UI** does not yet add arbitrary connectors; configuration is via `.env`.
-- **Chat history** requires sign-in and a working Supabase + service role setup.
-- **Interrupts** pause the stream until the user continues; use `DATAPILOT_SKIP_INTERRUPTS` for smoother demos.
+## 🗂️ Where things live
 
-## Repository layout
+- `backend/` — FastAPI app, `agents/`, `db/`, `schema/`, Supabase migrations
+- `frontend/` — Next.js app, chat UI, auth pages
+- `docs/` — demo media + write-ups
 
-- `backend/` – FastAPI app, `agents/`, `db/`, `chat.py`, `auth.py`, `schema/`
-- `frontend/` – Next.js app, chat UI, auth pages
-- `backend/supabase_migrations/` – SQL migrations
+Digging into the internals or pointing an AI assistant at the code? **[AGENTS.md](AGENTS.md)** is the map — agent pipeline, critical flows, and the gotchas that'll save you an afternoon.
 
-For contributors and AI assistants, see **[AGENTS.md](AGENTS.md)**.
+## 🤝 Want to contribute?
 
-## Contributing
+Yes please. 🙌 Bug fix, new data connector, smarter agent, or just better docs — it all counts. Start with **[CONTRIBUTING.md](CONTRIBUTING.md)** and **[AGENTS.md](AGENTS.md)**, and open an issue first for anything big so we can chat about it.
 
-Contributions are welcome! Whether it's a bug fix, a new data connector, an agent
-improvement, or docs — start with **[CONTRIBUTING.md](CONTRIBUTING.md)** and
-**[AGENTS.md](AGENTS.md)**. Open an issue to discuss larger changes first.
+## 📄 License
 
-## License
-
-Released under the [MIT License](LICENSE) — free to use, modify, and build on.
-Bring your own API keys (OpenAI, Supabase, your warehouse) and you're set.
+[MIT](LICENSE) — use it, fork it, build on it. Bring your own keys (OpenAI, Supabase, your warehouse) and you're off.
